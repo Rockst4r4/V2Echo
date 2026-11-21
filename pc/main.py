@@ -404,10 +404,28 @@ class EcholicenseApi:
 
     def _detect_auto_mtu(self, proto: str) -> int:
         overhead = 80 if proto.upper() == "WIREGUARD" else 60
-        for payload in (1472, 1452, 1422, 1392, 1362, 1322, 1280):
-            rc = self._run_hidden(["ping", "-n", "1", "-f", "-l", str(payload), "-w", "900", "1.1.1.1"])
-            if rc == 0:
-                return max(1280, min(1440, payload + 28 - overhead))
+        candidates = (1452, 1392, 1322)
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+        def _probe(payload: int) -> int:
+            try:
+                r = subprocess.run(
+                    ["ping", "-n", "1", "-f", "-l", str(payload), "-w", "500", "1.1.1.1"],
+                    capture_output=True,
+                    creationflags=flags,
+                    timeout=1.1,
+                )
+                return payload if r.returncode == 0 else 0
+            except Exception:
+                return 0
+
+        try:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                ok = [v for v in ex.map(_probe, candidates) if v > 0]
+            if ok:
+                return max(1280, min(1440, max(ok) + 28 - overhead))
+        except Exception:
+            pass
         return 1280 if proto.upper() == "WIREGUARD" else 1360
 
     def _resolve_dns(self) -> tuple[str, str]:
@@ -416,16 +434,27 @@ class EcholicenseApi:
             return ("Manual DNS", manual)
         if self._state.get("adBlocker"):
             return ("AdGuard AdBlock", "https://dns.adguard-dns.com/dns-query")
-        for name, ip, doh in [
+        providers = [
             ("Cloudflare", "1.1.1.1", "https://1.1.1.1/dns-query"),
             ("Quad9", "9.9.9.9", "https://dns.quad9.net/dns-query"),
             ("Google", "8.8.8.8", "https://dns.google/dns-query"),
-        ]:
+        ]
+
+        def _check(item):
+            name, ip, doh = item
             try:
-                with socket.create_connection((ip, 443), timeout=1.2):
+                with socket.create_connection((ip, 443), timeout=0.7):
                     return (name, doh)
             except Exception:
-                continue
+                return None
+
+        try:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                for res in ex.map(_check, providers):
+                    if res:
+                        return res
+        except Exception:
+            pass
         return ("Cloudflare", "https://1.1.1.1/dns-query")
 
     def _background_loops(self):
@@ -510,6 +539,18 @@ class EcholicenseApi:
         return self.connect()
 
     def connect(self) -> dict:
+        try:
+            return self._connect_impl()
+        except Exception as exc:
+            self._state["connectionState"] = "ERROR"
+            self._state["statusMessage"] = f"Error: {exc}"
+            try:
+                self._log_file.write_text(f"Connect exception: {exc}\n", encoding="utf-8")
+            except Exception:
+                pass
+            return self.get_state()
+
+    def _connect_impl(self) -> dict:
         srv = self._get_active_server()
         if not srv:
             self._state["statusMessage"] = "Add a subscription or config first"
@@ -531,7 +572,7 @@ class EcholicenseApi:
 
         self._active_port = find_free_port(SOCKS_PORT)
         mode = self._state.get("mode", "tun")
-        stacks_to_try = ["system", "mixed"] if mode == "tun" else ["system"]
+        stacks_to_try = ["system", "mixed", "gvisor"] if mode == "tun" else ["system"]
         cfg_path = self._data_dir / "active_config.json"
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
@@ -565,12 +606,15 @@ class EcholicenseApi:
                 self._log_fh = None
 
             self._log_fh = open(self._log_file, "w", encoding="utf-8", errors="replace")
+            env = dict(os.environ)
+            env["NO_COLOR"] = "1"
             self._proc = subprocess.Popen(
                 [str(singbox_bin), "run", "-c", str(cfg_path)],
                 cwd=str(get_app_dir()),
                 stdout=self._log_fh,
                 stderr=subprocess.STDOUT,
                 creationflags=flags,
+                env=env,
             )
             time.sleep(1.2)
             if self._proc.poll() is None:

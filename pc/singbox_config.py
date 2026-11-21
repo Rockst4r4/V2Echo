@@ -111,14 +111,15 @@ def build_outbound(profile: dict, mtu: int, mux_cfg: dict) -> dict:
         b64 = raw.replace("vmess://", "", 1).strip()
         pad = "=" * ((4 - len(b64) % 4) % 4)
         obj = json.loads(base64.b64decode(b64 + pad).decode("utf-8"))
+        aid_raw = str(obj.get("aid") or "0").strip()
         out = {
             "type": "vmess",
             "tag": "proxy",
-            "server": obj.get("add", profile["host"]),
-            "server_port": int(obj.get("port", profile["port"])),
-            "uuid": obj.get("id", ""),
-            "security": obj.get("scy", "auto") or "auto",
-            "alter_id": int(obj.get("aid", 0) or 0),
+            "server": str(obj.get("add") or profile["host"]),
+            "server_port": int(str(obj.get("port") or profile["port"])),
+            "uuid": str(obj.get("id") or ""),
+            "security": str(obj.get("scy") or "auto") or "auto",
+            "alter_id": int(aid_raw) if aid_raw.isdigit() else 0,
         }
         net = (obj.get("net") or "tcp").lower()
         tls = (obj.get("tls") or "").lower()
@@ -142,7 +143,6 @@ def build_outbound(profile: dict, mtu: int, mux_cfg: dict) -> dict:
             }
         return out
 
-    # VLESS / TROJAN
     base = raw.split("#", 1)[0].replace(" ", "%20")
     u = urlparse(base)
     params = {k.lower(): unquote(v[0]) for k, v in parse_qs(u.query).items() if v}
@@ -220,21 +220,29 @@ def build_outbound(profile: dict, mtu: int, mux_cfg: dict) -> dict:
 
 def build_singbox_config(
     profile: dict,
-    mode: str,               # "tun" or "proxy"
+    mode: str,
     dns_server: str,
     mtu: int,
     iran_split: bool,
     adblock: bool,
     mux_cfg: dict,
-    split_mode: str,         # "bypass" or "only"
+    split_mode: str,
     split_apps: list[str],
     socks_port: int = 10808,
     tun_stack: str = "system",
 ) -> dict:
     proxy_out = build_outbound(profile, mtu, mux_cfg)
-    dns_remote = dns_server.strip()
+    dns_remote = (dns_server or "").strip()
     if not dns_remote:
         dns_remote = "https://dns.adguard-dns.com/dns-query" if adblock else "https://1.1.1.1/dns-query"
+
+    remote_dns_entry = {
+        "tag": "remote",
+        "address": dns_remote,
+        "detour": "proxy",
+    }
+    if not IPV4_RE.match(dns_remote):
+        remote_dns_entry["address_resolver"] = "local"
 
     dns_rules = [{"outbound": "any", "server": "local"}]
     if iran_split:
@@ -253,8 +261,6 @@ def build_singbox_config(
     ]
 
     if mode == "tun":
-        # استک system + بدون Fake-IP تا در CMD پینگ فیک 1ms نشان ندهد
-        # روی WireGuard ترافیک ICMP لایه ۳ واقعی از تانل عبور کرده و پینگ واقعی سرور را برمی‌گرداند
         inbounds.append(
             {
                 "type": "tun",
@@ -291,10 +297,10 @@ def build_singbox_config(
             route_rules.append({"process_name": clean_apps, "outbound": "direct"})
 
     return {
-        "log": {"level": "warn", "timestamp": True, "disable_color": True},
+        "log": {"level": "warn", "timestamp": True},
         "dns": {
             "servers": [
-                {"tag": "remote", "address": dns_remote, "address_resolver": "local", "detour": "proxy"},
+                remote_dns_entry,
                 {"tag": "local", "address": "178.22.122.100", "detour": "direct"},
                 {"tag": "block", "address": "rcode://success"},
             ],
