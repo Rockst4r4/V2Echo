@@ -4,13 +4,43 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- سپر فیروزه‌ای اکولایسنس (بخش چپ و بالا) -->
     <path
-        android:fillColor="#00E5A3"
-        android:pathData="M54,24L31,34V52C31,67.5 40.8,81.9 54,86C67.2,81.9 77,67.5 77,52V34L54,24Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#22E4FF"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M56,22 C44,22 33,26 27,31 L27,48 C27,65 38,78 52,85" />
+    <!-- خط داخلی سپر چپ -->
     <path
-        android:fillColor="#090D16"
-        android:pathData="M54,31L37,38.5V52C37,64.1 44.3,75.3 54,78.8C63.7,75.3 71,64.1 71,52V38.5L54,31Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#19B5D8"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M52,27 C43,27 36,30 32,34 L32,48 C32,61 40,71 49,78" />
+    <!-- بخش راست سپر (شکل C/E مدرن) -->
     <path
-        android:fillColor="#38BDF8"
-        android:pathData="M50,58.5L43.5,52L40.7,54.8L50,64.1L67.3,46.8L64.5,44L50,58.5Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#22E4FF"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M62,24 C70,26 76,29 80,32 L80,45 L64,45" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#22E4FF"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M63,54 L80,54 C78,68 68,79 54,85" />
+    <!-- رعدوبرق سبز نئونی مرکزی -->
+    <path
+        android:fillColor="#11191F"
+        android:strokeColor="#7CFF4F"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M61,21 L39,55 L52,55 L44,85 L67,48 L54,48 Z" />
 </vector>

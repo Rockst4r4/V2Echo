@@ -30,6 +30,12 @@ data class ServerProfile(
         }
         return Regex("""(^|[\s\-_\[\]()|])ai([\s\-_\[\]()|]|$)""").containsMatchIn(lower)
     }
+
+    fun isGaming(): Boolean {
+        val lower = name.lowercase()
+        val hasGameWord = lower.contains("gaming") || lower.contains("game") || lower.contains("گیم")
+        return protocol == VpnProtocol.WIREGUARD && hasGameWord
+    }
 }
 
 data class SubscriptionInfo(

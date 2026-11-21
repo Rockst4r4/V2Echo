@@ -34,6 +34,7 @@ val EmeraldGlow = Color(0xFF00E5A3)
 val CyanLiquid = Color(0xFF38BDF8)
 val AmberWarn = Color(0xFFFFB020)
 val DangerRed = Color(0xFFFF4D6D)
+val GamingRed = Color(0xFFFF5A6E)
 
 @Composable
 fun LiquidAmbientBackground(

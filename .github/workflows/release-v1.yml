@@ -1,0 +1,165 @@
+name: Echolicense v1.0.0 Official Release (Android + PC)
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Apply custom branding logo if present
+        run: |
+          python3 - << 'PY_LOGO'
+          import os
+          src = next((p for p in ["branding/logo.png", "branding/logo.jpg", "branding/logo.jpeg"] if os.path.exists(p)), None)
+          if src:
+              from PIL import Image
+              img = Image.open(src).convert("RGBA")
+              side = min(img.size)
+              l, t = (img.width - side) // 2, (img.height - side) // 2
+              sq = img.crop((l, t, l + side, t + side))
+              for folder, px in [("mipmap-mdpi", 48), ("mipmap-hdpi", 72), ("mipmap-xhdpi", 96), ("mipmap-xxhdpi", 144), ("mipmap-xxxhdpi", 192)]:
+                  d = f"app/src/main/res/{folder}"
+                  os.makedirs(d, exist_ok=True)
+                  resized = sq.resize((px, px), Image.LANCZOS)
+                  resized.save(f"{d}/ic_launcher.png")
+                  resized.save(f"{d}/ic_launcher_round.png")
+              for xml in ["app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml", "app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml"]:
+                  if os.path.exists(xml):
+                      os.remove(xml)
+              print("Applied custom raster logo to Android mipmaps!")
+          else:
+              print("Using built-in Echolicense vector logo.")
+          PY_LOGO
+
+      - name: Prepare Release Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > app/release.jks
+          else
+            keytool -genkeypair -v -keystore app/release.jks \
+              -storepass "${KEYSTORE_PASSWORD:-EcholicenseV1Release!}" \
+              -keypass "${KEY_PASSWORD:-EcholicenseV1Release!}" \
+              -alias "${KEY_ALIAS:-echolicense}" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Echolicense, OU=VPN, O=Echolicense, C=DE"
+          fi
+
+      - name: Download libv2ray.aar & Iran Geo Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p app/libs app/src/main/assets
+          AAR_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/2dust/AndroidLibXrayLite/releases/latest" | grep "browser_download_url.*aar" | head -n 1 | cut -d '"' -f 4)
+          curl -fL -o app/libs/libv2ray.aar "$AAR_URL"
+          curl -fL -o app/src/main/assets/geoip.dat "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geoip.dat"
+          curl -fL -o app/src/main/assets/geosite.dat "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geosite.dat"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build Official Signed Release APK & Play Store AAB
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          gradle assembleRelease bundleRelease
+          cp app/build/outputs/apk/release/app-release.apk Echolicense-Android-v1.0.0.apk
+          cp app/build/outputs/bundle/release/app-release.aab Echolicense-Android-v1.0.0.aab
+
+      - name: Upload Android Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Echolicense-Android-v1.0.0
+          path: |
+            Echolicense-Android-v1.0.0.apk
+            Echolicense-Android-v1.0.0.aab
+
+  build-windows-pc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies & build icon
+        working-directory: pc
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python generate_icon.py
+
+      - name: Download sing-box v1.10.7 & Wintun
+        shell: pwsh
+        working-directory: pc
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.10.7/sing-box-1.10.7-windows-amd64.zip" -OutFile "singbox.zip"
+          Expand-Archive -Path "singbox.zip" -DestinationPath "singbox_tmp" -Force
+          Copy-Item "singbox_tmp\sing-box-1.10.7-windows-amd64\sing-box.exe" -Destination "sing-box.exe"
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "wintun.zip"
+          Expand-Archive -Path "wintun.zip" -DestinationPath "wintun_tmp" -Force
+          Copy-Item "wintun_tmp\wintun\bin\amd64\wintun.dll" -Destination "wintun.dll"
+
+      - name: Build Windows EcholicenseVPN.exe
+        shell: pwsh
+        working-directory: pc
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --uac-admin --name "EcholicenseVPN" --icon "assets\icon.ico" --add-data "ui;ui" main.py
+          New-Item -ItemType Directory -Force -Path "release_pkg" | Out-Null
+          Copy-Item "dist\EcholicenseVPN.exe" -Destination "release_pkg\"
+          Copy-Item "sing-box.exe" -Destination "release_pkg\"
+          Copy-Item "wintun.dll" -Destination "release_pkg\"
+          Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v1.0.0.zip" -Force
+
+      - name: Upload Windows PC Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Echolicense-Windows-v1.0.0
+          path: Echolicense-Windows-v1.0.0.zip
+
+  publish-release:
+    needs: [build-android, build-windows-pc]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-files
+
+      - name: Publish Official GitHub Release v1.0.0
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: "Echolicense VPN v1.0.0 (Android + Windows PC)"
+          body: |
+            ## Echolicense VPN v1.0.0 Official Release
+            - **Android**: Signed Release APK (`Echolicense-Android-v1.0.0.apk`) & Google Play AAB (`Echolicense-Android-v1.0.0.aab`)
+            - **Windows PC**: Portable Release (`Echolicense-Windows-v1.0.0.zip`) with System Proxy, Real-Ping TUN Mode, KillSwitch, Startup App, Auto-Connect & Graphical Split Tunneling
+            - **New**: Minimal Red Gaming Mode (WireGuard) & Echolicense Brand Logo
+          files: |
+            release-files/Echolicense-Android-v1.0.0/*
+            release-files/Echolicense-Windows-v1.0.0/*

@@ -50,6 +50,7 @@ fun MainScreen(
     onToggleIranSplit: (Boolean) -> Unit,
     onToggleAdBlocker: (Boolean) -> Unit,
     onToggleAiPro: () -> Unit,
+    onToggleGaming: () -> Unit,
     onToggleAutoMtu: (Boolean) -> Unit,
     onChangeMtu: (Int) -> Unit,
     onApplyReconnect: () -> Unit,
@@ -65,8 +66,15 @@ fun MainScreen(
     var showDnsDialog by remember { mutableStateOf(false) }
     var showMuxDialog by remember { mutableStateOf(false) }
 
-    val visibleServers = remember(uiState.servers, uiState.aiProOnly) {
-        if (uiState.aiProOnly) uiState.servers.filter { it.isAiPro() } else uiState.servers
+    val visibleServers = remember(uiState.servers, uiState.aiProOnly, uiState.gamingOnly) {
+        when {
+            uiState.gamingOnly -> {
+                val exact = uiState.servers.filter { it.isGaming() }
+                if (exact.isNotEmpty()) exact else uiState.servers.filter { it.protocol == VpnProtocol.WIREGUARD }
+            }
+            uiState.aiProOnly -> uiState.servers.filter { it.isAiPro() }
+            else -> uiState.servers
+        }
     }
 
     LiquidAmbientBackground(state = uiState.connectionState) {
@@ -171,13 +179,34 @@ fun MainScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // 4. حالت اختصاصی AI Pro
-            AiProModeCard(
-                s = s,
-                enabled = uiState.aiProOnly,
-                aiServersCount = uiState.servers.count { it.isAiPro() },
-                onClick = onToggleAiPro
-            )
+            // 4. کارت‌های دوگانه AI Pro و Gaming (قرمز مینیمال)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                ModeMiniCard(
+                    modifier = Modifier.weight(1f),
+                    title = "AI Pro",
+                    subtitle = "${uiState.servers.count { it.isAiPro() }} srv",
+                    icon = Icons.Rounded.AutoAwesome,
+                    accent = AiProAccent,
+                    enabled = uiState.aiProOnly,
+                    badge = if (uiState.aiProOnly) s.active else s.off,
+                    onClick = onToggleAiPro
+                )
+                val gamingCount = uiState.servers.count { it.isGaming() }
+                    .let { if (it > 0) it else uiState.servers.count { srv -> srv.protocol == VpnProtocol.WIREGUARD } }
+                ModeMiniCard(
+                    modifier = Modifier.weight(1f),
+                    title = s.gamingTitle,
+                    subtitle = "WG • $gamingCount",
+                    icon = Icons.Rounded.SportsEsports,
+                    accent = GamingRed,
+                    enabled = uiState.gamingOnly,
+                    badge = if (uiState.gamingOnly) s.active else s.off,
+                    onClick = onToggleGaming
+                )
+            }
 
             Spacer(Modifier.height(12.dp))
 
@@ -481,7 +510,7 @@ fun MainScreen(
     if (showServerSheet) {
         ServerPickerDialog(
             s = s,
-            title = if (uiState.aiProOnly) s.aiProServers else s.selectServer,
+            title = when { uiState.gamingOnly -> s.gamingServers; uiState.aiProOnly -> s.aiProServers; else -> s.selectServer },
             servers = visibleServers,
             activeId = uiState.activeServer?.id,
             onSelect = {
@@ -1218,4 +1247,63 @@ private fun ServerPickerDialog(
             TextButton(onClick = onDismiss) { Text(s.close, color = Color.White) }
         }
     )
+}
+
+@Composable
+private fun ModeMiniCard(
+    modifier: Modifier = Modifier,
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    accent: Color,
+    enabled: Boolean,
+    badge: String,
+    onClick: () -> Unit
+) {
+    val borderColor by animateColorAsState(
+        targetValue = if (enabled) accent else accent.copy(alpha = 0.35f),
+        animationSpec = tween(300),
+        label = "modeBorder"
+    )
+    LiquidGlassCard(
+        modifier = modifier.bounceClick(onClick = onClick),
+        cornerRadius = 20.dp,
+        highlightColor = borderColor
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    if (enabled) accent.copy(alpha = 0.22f) else accent.copy(alpha = 0.06f)
+                )
+                .padding(horizontal = 12.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(if (enabled) accent.copy(alpha = 0.35f) else accent.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, null, tint = if (enabled) Color.White else accent, modifier = Modifier.size(18.dp))
+                }
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(subtitle, color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp, maxLines = 1)
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (enabled) accent else Color.White.copy(alpha = 0.12f))
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
+            ) {
+                Text(badge, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }

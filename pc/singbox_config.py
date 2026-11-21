@@ -1,0 +1,315 @@
+import base64
+import json
+import re
+from urllib.parse import urlparse, parse_qs, unquote
+
+IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+AD_DOMAIN_SUFFIXES = [
+    "doubleclick.net",
+    "googlesyndication.com",
+    "googleadservices.com",
+    "adservice.google.com",
+    "pagead2.googlesyndication.com",
+    "ads.youtube.com",
+    "s0.2mdn.net",
+    "app-measurement.com",
+    "admob.com",
+    "unityads.unity3d.com",
+    "applovin.com",
+]
+
+
+def _ensure_cidr(addr: str) -> str:
+    addr = addr.strip()
+    if "/" in addr:
+        return addr
+    return f"{addr}/128" if ":" in addr else f"{addr}/32"
+
+
+def _parse_reserved(raw: str):
+    cleaned = raw.strip().lstrip("[").rstrip("]").strip()
+    if not cleaned:
+        return None
+    if "," in cleaned:
+        nums = [int(x.strip()) for x in cleaned.split(",") if x.strip().isdigit()]
+        if len(nums) == 3 and all(0 <= n <= 255 for n in nums):
+            return nums
+    try:
+        b = base64.b64decode(cleaned)
+        if len(b) == 3:
+            return list(b)
+    except Exception:
+        pass
+    return None
+
+
+def build_outbound(profile: dict, mtu: int, mux_cfg: dict) -> dict:
+    proto = profile["protocol"].upper()
+    raw = profile["rawConfig"]
+
+    if proto == "WIREGUARD":
+        section = ""
+        priv_key, pub_key, psk, endpoint, reserved_raw = "", "", "", "", ""
+        addresses = []
+        for line in raw.splitlines():
+            line = line.split("#", 1)[0].split(";", 1)[0].strip()
+            if not line:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line.lower()
+                continue
+            if "=" not in line:
+                continue
+            k, v = [x.strip() for x in line.split("=", 1)]
+            kl = k.lower()
+            if section == "[interface]":
+                if kl == "privatekey":
+                    priv_key = v
+                elif kl == "address":
+                    addresses.extend([_ensure_cidr(a) for a in v.split(",") if a.strip()])
+                elif kl == "reserved":
+                    reserved_raw = v
+            elif section == "[peer]":
+                if kl == "publickey":
+                    pub_key = v
+                elif kl == "presharedkey":
+                    psk = v
+                elif kl == "endpoint":
+                    endpoint = v
+                elif kl == "reserved" and not reserved_raw:
+                    reserved_raw = v
+
+        host = profile["host"]
+        port = int(profile["port"])
+        if endpoint:
+            if endpoint.startswith("[") and "]:" in endpoint:
+                host, p = endpoint[1:].split("]:", 1)
+                port = int(p)
+            elif ":" in endpoint:
+                host, p = endpoint.rsplit(":", 1)
+                port = int(p)
+
+        out = {
+            "type": "wireguard",
+            "tag": "proxy",
+            "server": host,
+            "server_port": port,
+            "local_address": addresses or ["10.0.0.2/32"],
+            "private_key": priv_key,
+            "peer_public_key": pub_key,
+            "mtu": max(1200, min(1500, int(mtu))),
+        }
+        if psk:
+            out["pre_shared_key"] = psk
+        res_bytes = _parse_reserved(reserved_raw)
+        if res_bytes:
+            out["reserved"] = res_bytes
+        return out
+
+    if proto == "VMESS":
+        b64 = raw.replace("vmess://", "", 1).strip()
+        pad = "=" * ((4 - len(b64) % 4) % 4)
+        obj = json.loads(base64.b64decode(b64 + pad).decode("utf-8"))
+        out = {
+            "type": "vmess",
+            "tag": "proxy",
+            "server": obj.get("add", profile["host"]),
+            "server_port": int(obj.get("port", profile["port"])),
+            "uuid": obj.get("id", ""),
+            "security": obj.get("scy", "auto") or "auto",
+            "alter_id": int(obj.get("aid", 0) or 0),
+        }
+        net = (obj.get("net") or "tcp").lower()
+        tls = (obj.get("tls") or "").lower()
+        host_hdr = obj.get("host") or out["server"]
+        path = obj.get("path") or "/"
+        sni = obj.get("sni") or host_hdr
+        if tls == "tls":
+            out["tls"] = {"enabled": True, "server_name": sni, "utls": {"enabled": True, "fingerprint": "chrome"}}
+        if net == "ws":
+            out["transport"] = {"type": "ws", "path": path, "headers": {"Host": host_hdr}}
+        elif net == "grpc":
+            out["transport"] = {"type": "grpc", "service_name": path}
+        elif net == "httpupgrade":
+            out["transport"] = {"type": "httpupgrade", "path": path, "host": host_hdr}
+        if mux_cfg.get("enabled"):
+            out["multiplex"] = {
+                "enabled": True,
+                "protocol": "h2mux",
+                "max_connections": int(mux_cfg.get("concurrency", 8)),
+                "min_streams": 4,
+            }
+        return out
+
+    # VLESS / TROJAN
+    base = raw.split("#", 1)[0].replace(" ", "%20")
+    u = urlparse(base)
+    params = {k.lower(): unquote(v[0]) for k, v in parse_qs(u.query).items() if v}
+    secret = unquote(u.username or "")
+    net = params.get("type", "tcp").lower()
+    sec = params.get("security", "none").lower()
+    host = u.hostname or profile["host"]
+    port = u.port or int(profile["port"])
+
+    if proto == "TROJAN":
+        out = {
+            "type": "trojan",
+            "tag": "proxy",
+            "server": host,
+            "server_port": port,
+            "password": secret,
+        }
+    else:
+        out = {
+            "type": "vless",
+            "tag": "proxy",
+            "server": host,
+            "server_port": port,
+            "uuid": secret,
+        }
+        flow = params.get("flow", "").strip()
+        if flow and not (mux_cfg.get("enabled") and "vision" in flow.lower()):
+            out["flow"] = flow
+
+    if sec == "reality":
+        out["tls"] = {
+            "enabled": True,
+            "server_name": params.get("sni", ""),
+            "utls": {"enabled": True, "fingerprint": params.get("fp", "chrome") or "chrome"},
+            "reality": {
+                "enabled": True,
+                "public_key": params.get("pbk", ""),
+                "short_id": params.get("sid", ""),
+            },
+        }
+    elif sec == "tls":
+        out["tls"] = {
+            "enabled": True,
+            "server_name": params.get("sni", host) or host,
+            "insecure": params.get("allowinsecure") == "1" or params.get("insecure") == "1",
+            "utls": {"enabled": True, "fingerprint": params.get("fp", "chrome") or "chrome"},
+        }
+        if params.get("alpn"):
+            out["tls"]["alpn"] = [a.strip() for a in params["alpn"].split(",") if a.strip()]
+
+    if net == "ws":
+        out["transport"] = {
+            "type": "ws",
+            "path": params.get("path", "/"),
+            "headers": {"Host": params.get("host", host)},
+        }
+    elif net == "grpc":
+        out["transport"] = {"type": "grpc", "service_name": params.get("servicename", "")}
+    elif net == "httpupgrade":
+        out["transport"] = {
+            "type": "httpupgrade",
+            "path": params.get("path", "/"),
+            "host": params.get("host", host),
+        }
+
+    if mux_cfg.get("enabled"):
+        out["multiplex"] = {
+            "enabled": True,
+            "protocol": "h2mux",
+            "max_connections": int(mux_cfg.get("concurrency", 8)),
+            "min_streams": 4,
+        }
+    return out
+
+
+def build_singbox_config(
+    profile: dict,
+    mode: str,               # "tun" or "proxy"
+    dns_server: str,
+    mtu: int,
+    iran_split: bool,
+    adblock: bool,
+    mux_cfg: dict,
+    split_mode: str,         # "bypass" or "only"
+    split_apps: list[str],
+    socks_port: int = 10808,
+) -> dict:
+    proxy_out = build_outbound(profile, mtu, mux_cfg)
+    dns_remote = dns_server.strip()
+    if not dns_remote:
+        dns_remote = "https://dns.adguard-dns.com/dns-query" if adblock else "https://1.1.1.1/dns-query"
+
+    dns_rules = [{"outbound": "any", "server": "local"}]
+    if iran_split:
+        dns_rules.append({"domain_suffix": [".ir"], "server": "local"})
+    if adblock:
+        dns_rules.append({"domain_suffix": AD_DOMAIN_SUFFIXES, "server": "block"})
+
+    inbounds = [
+        {
+            "type": "mixed",
+            "tag": "mixed-in",
+            "listen": "127.0.0.1",
+            "listen_port": socks_port,
+            "sniff": True,
+        }
+    ]
+
+    if mode == "tun":
+        # استک system + بدون Fake-IP تا در CMD پینگ فیک 1ms نشان ندهد
+        # روی WireGuard ترافیک ICMP لایه ۳ واقعی از تانل عبور کرده و پینگ واقعی سرور را برمی‌گرداند
+        inbounds.append(
+            {
+                "type": "tun",
+                "tag": "tun-in",
+                "interface_name": "EcholicenseTUN",
+                "inet4_address": "172.19.0.1/30",
+                "mtu": max(1200, min(1500, int(mtu))),
+                "auto_route": True,
+                "strict_route": True,
+                "stack": "system",
+                "sniff": True,
+            }
+        )
+
+    route_rules = [
+        {"protocol": "dns", "outbound": "dns-out"},
+        {"ip_is_private": True, "outbound": "direct"},
+    ]
+
+    if adblock:
+        route_rules.append({"domain_suffix": AD_DOMAIN_SUFFIXES, "outbound": "block"})
+
+    if iran_split:
+        route_rules.append({"domain_suffix": [".ir"], "outbound": "direct"})
+
+    clean_apps = [a.strip() for a in (split_apps or []) if a.strip()]
+    final_outbound = "proxy"
+
+    if clean_apps:
+        if split_mode == "only":
+            route_rules.append({"process_name": clean_apps, "outbound": "proxy"})
+            final_outbound = "direct"
+        else:
+            route_rules.append({"process_name": clean_apps, "outbound": "direct"})
+
+    return {
+        "log": {"level": "warn", "timestamp": True},
+        "dns": {
+            "servers": [
+                {"tag": "remote", "address": dns_remote, "address_resolver": "local", "detour": "proxy"},
+                {"tag": "local", "address": "178.22.122.100", "detour": "direct"},
+                {"tag": "block", "address": "rcode://success"},
+            ],
+            "rules": dns_rules,
+            "strategy": "ipv4_only",
+        },
+        "inbounds": inbounds,
+        "outbounds": [
+            proxy_out,
+            {"type": "direct", "tag": "direct"},
+            {"type": "block", "tag": "block"},
+            {"type": "dns", "tag": "dns-out"},
+        ],
+        "route": {
+            "auto_detect_interface": True,
+            "rules": route_rules,
+            "final": final_outbound,
+        },
+    }

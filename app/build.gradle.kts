@@ -12,14 +12,31 @@ android {
         applicationId = "com.echolicense.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.6.0"
+        versionCode = 1
+        versionName = "1.0.0"
+    }
+
+    signingConfigs {
+        create("release") {
+            val ks = file("release.jks")
+            if (ks.exists()) {
+                storeFile = ks
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "EcholicenseV1Release!"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "echolicense"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "EcholicenseV1Release!"
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = if (file("release.jks").exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -52,8 +69,6 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
-
-    // اسکنر QR Code آفلاین و سبک (بدون وابستگی به ماژول آنلاین گوگل‌پلی)
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")

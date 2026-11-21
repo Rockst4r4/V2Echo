@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Echolicense VPN</title>
+<style>
+:root {
+  --bg-top: #112233;
+  --bg-mid: #0A1016;
+  --bg-bot: #0D161E;
+  --glass: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --cyan: #22E4FF;
+  --green: #00E5A3;
+  --bolt: #7CFF4F;
+  --purple: #A855F7;
+  --gaming: #FF5A6E;
+  --amber: #FFB020;
+  --text: #F8FAFC;
+  --muted: rgba(248, 250, 252, 0.65);
+}
+* { box-sizing: border-box; user-select: none; margin: 0; padding: 0; font-family: "Segoe UI", Tahoma, sans-serif; }
+body {
+  min-height: 100vh;
+  background: radial-gradient(circle at 20% 0%, var(--bg-top), var(--bg-mid) 55%, var(--bg-bot));
+  color: var(--text);
+  padding: 16px;
+  transition: background 0.6s ease;
+}
+body.connected { --bg-top: #0A4A3A; --bg-bot: #051F19; }
+body.gaming-active { --bg-top: #3C1622; }
+body.rtl { direction: rtl; }
+
+.glass {
+  background: linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04));
+  backdrop-filter: blur(22px);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  transition: transform 0.16s cubic-bezier(.34,1.56,.64,1), border-color 0.25s ease, background 0.25s ease;
+}
+.click:active { transform: scale(0.95); }
+.click { cursor: pointer; }
+
+.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.4px; }
+.brand .sub { font-size: 11px; color: var(--muted); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-actions { display: flex; gap: 8px; }
+.icon-btn {
+  padding: 8px 11px; border-radius: 14px; font-size: 13px; color: var(--text);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+
+.banner {
+  padding: 12px 14px; margin-bottom: 14px; border-color: rgba(255,176,32,0.55);
+  background: linear-gradient(135deg, rgba(255,176,32,0.2), rgba(168,85,247,0.14));
+}
+.banner-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 13px; }
+.banner p { font-size: 11px; color: rgba(255,255,255,0.85); margin-top: 4px; }
+.promo-row { display: flex; gap: 8px; margin-top: 8px; }
+.chip { padding: 5px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; background: rgba(0,0,0,0.3); border: 1px solid var(--amber); color: var(--amber); }
+
+.power-wrap { display: flex; flex-direction: column; align-items: center; margin: 14px 0 16px; }
+.power-ring {
+  width: 148px; height: 148px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid rgba(255,255,255,0.22);
+  background: rgba(255,255,255,0.05);
+  transition: all 0.4s ease;
+}
+body.connected .power-ring { border-color: var(--green); box-shadow: 0 0 36px rgba(0,229,163,0.32); }
+.power-btn {
+  width: 118px; height: 118px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid rgba(255,255,255,0.35);
+  background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(255,255,255,0.06));
+  font-size: 42px; color: #fff;
+}
+body.connected .power-btn { border-color: var(--green); color: var(--green); }
+.timer { margin-top: 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 5px; margin-bottom: 12px; }
+.seg-btn {
+  text-align: center; padding: 8px; border-radius: 14px; font-size: 12px; font-weight: 700; color: var(--muted);
+}
+.seg-btn.active { background: rgba(34,228,255,0.2); color: #fff; border: 1px solid var(--cyan); }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.mode-card { padding: 11px 12px; display: flex; align-items: center; justify-content: space-between; }
+.mode-card.ai { border-color: rgba(168,85,247,0.4); }
+.mode-card.ai.on { border-color: var(--purple); background: rgba(168,85,247,0.22); }
+.mode-card.gaming { border-color: rgba(255,90,110,0.45); }
+.mode-card.gaming.on { border-color: var(--gaming); background: rgba(255,90,110,0.22); }
+.mode-title { font-size: 13px; font-weight: 700; }
+.mode-sub { font-size: 10px; color: var(--muted); }
+.pill { padding: 3px 8px; border-radius: 8px; font-size: 10px; font-weight: 700; background: rgba(255,255,255,0.14); }
+.mode-card.ai.on .pill { background: var(--purple); }
+.mode-card.gaming.on .pill { background: var(--gaming); }
+
+.card { padding: 12px 14px; margin-bottom: 10px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.server-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.server-box { flex: 1; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; }
+.ping-btn { padding: 10px 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--green); border-color: rgba(34,228,255,0.45); }
+
+.bar-bg { height: 7px; border-radius: 8px; background: rgba(255,255,255,0.12); margin-top: 8px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--green); border-radius: 8px; transition: width 0.4s ease; }
+
+.switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; inset: 0; border-radius: 24px; background: rgba(255,255,255,0.18); transition: 0.25s; cursor: pointer; }
+.slider:before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: 0.25s; }
+.switch input:checked + .slider { background: var(--green); }
+.switch.red input:checked + .slider { background: var(--gaming); }
+.switch input:checked + .slider:before { transform: translateX(18px); }
+
+.bot-card {
+  padding: 13px 16px; display: flex; align-items: center; justify-content: space-between;
+  border-color: rgba(34,228,255,0.5);
+  background: linear-gradient(135deg, rgba(34,228,255,0.16), rgba(0,229,163,0.1));
+}
+
+/* Modals */
+.modal-bg {
+  position: fixed; inset: 0; background: rgba(4,8,14,0.75); backdrop-filter: blur(8px);
+  display: none; align-items: center; justify-content: center; padding: 16px; z-index: 50;
+}
+.modal-bg.open { display: flex; }
+.modal {
+  width: 100%; max-width: 400px; max-height: 85vh; overflow-y: auto;
+  background: #101824; border: 1px solid var(--glass-border); border-radius: 22px; padding: 18px;
+}
+.modal h2 { font-size: 16px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+input[type="text"], input[type="number"], textarea {
+  width: 100%; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 12px; padding: 9px 11px; color: #fff; font-size: 12px; outline: none; margin-bottom: 8px;
+}
+.btn {
+  width: 100%; padding: 10px; border-radius: 12px; border: none; font-weight: 700; font-size: 13px;
+  cursor: pointer; background: var(--green); color: #051612;
+}
+.btn-outline { background: rgba(255,255,255,0.09); color: #fff; border: 1px solid rgba(255,255,255,0.18); }
+.list-item {
+  padding: 9px 11px; border-radius: 12px; background: rgba(255,255,255,0.06);
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 12px;
+}
+.list-item.selected { background: rgba(0,229,163,0.18); border: 1px solid var(--green); }
+.divider { height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0; }
+.setting-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <svg width="32" height="32" viewBox="0 0 108 108">
+      <path d="M56,22 C44,22 33,26 27,31 L27,48 C27,65 38,78 52,85" fill="none" stroke="#22E4FF" stroke-width="6" stroke-linecap="round"/>
+      <path d="M62,24 C70,26 76,29 80,32 L80,45 L64,45" fill="none" stroke="#22E4FF" stroke-width="6" stroke-linecap="round"/>
+      <path d="M63,54 L80,54 C78,68 68,79 54,85" fill="none" stroke="#22E4FF" stroke-width="6" stroke-linecap="round"/>
+      <polygon points="61,21 39,55 52,55 44,85 67,48 54,48" fill="#0A1016" stroke="#7CFF4F" stroke-width="6" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <h1>Echolicense <span style="font-size:10px;color:var(--cyan)">v1.0</span></h1>
+      <div class="sub" id="statusMsg">Ready to connect</div>
+    </div>
+  </div>
+  <div class="top-actions">
+    <div class="glass icon-btn click" onclick="openModal('subsModal')">🔗 <span data-i18n="subs">Subs</span></div>
+    <div class="glass icon-btn click" onclick="openModal('settingsModal')" title="Settings">⚙️</div>
+  </div>
+</div>
+
+<div id="bannerBox" class="glass banner" style="display:none">
+  <div class="banner-head">
+    <span id="bannerTitle"></span>
+    <span class="click" onclick="dismissBanner()">✕</span>
+  </div>
+  <p id="bannerMsg"></p>
+  <div class="promo-row" id="bannerActions"></div>
+</div>
+
+<div class="power-wrap">
+  <div class="power-ring">
+    <div class="power-btn click" onclick="toggleConnect()">⏻</div>
+  </div>
+  <div class="timer" id="timerText">Tap to connect</div>
+</div>
+
+<div class="glass seg">
+  <div class="seg-btn click" id="modeTun" onclick="setMode('tun')">TUN Mode (Real Ping)</div>
+  <div class="seg-btn click" id="modeProxy" onclick="setMode('proxy')">System Proxy</div>
+</div>
+
+<div class="grid2">
+  <div class="glass mode-card ai click" id="aiCard" onclick="toggleAiPro()">
+    <div>
+      <div class="mode-title">✨ AI Pro</div>
+      <div class="mode-sub" id="aiSub">0 servers</div>
+    </div>
+    <span class="pill" id="aiPill">OFF</span>
+  </div>
+  <div class="glass mode-card gaming click" id="gamingCard" onclick="toggleGaming()">
+    <div>
+      <div class="mode-title" style="color:#FF8090">🎮 Gaming</div>
+      <div class="mode-sub" id="gamingSub">WireGuard</div>
+    </div>
+    <span class="pill" id="gamingPill">OFF</span>
+  </div>
+</div>
+
+<div class="server-row">
+  <div class="glass server-box click" onclick="openModal('serversModal')">
+    <div style="overflow:hidden">
+      <div style="font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="activeServerName">No server selected</div>
+      <div style="font-size:11px;color:var(--muted)" id="activeServerMeta">Add subscription or WireGuard</div>
+    </div>
+    <span style="color:var(--muted)">›</span>
+  </div>
+  <div class="glass ping-btn click" onclick="pingAll()">
+    <span>⚡</span>
+    <span data-i18n="pingAll">Ping All</span>
+  </div>
+</div>
+
+<!-- KillSwitch on Main Screen -->
+<div class="glass card row" style="border-color:rgba(255,90,110,0.4)">
+  <div>
+    <div style="font-size:13px;font-weight:700">🛡️ KillSwitch</div>
+    <div style="font-size:11px;color:var(--muted)" data-i18n="ksSub">Block internet leak if VPN drops</div>
+  </div>
+  <label class="switch red"><input type="checkbox" id="ksToggle" onchange="toggleKillSwitch(this.checked)"><span class="slider"></span></label>
+</div>
+
+<!-- Graphical Split Tunneling quick card -->
+<div class="glass card row click" onclick="openSplitModal()">
+  <div>
+    <div style="font-size:13px;font-weight:700">🔀 <span data-i18n="splitTitle">Graphical Split Tunneling</span></div>
+    <div style="font-size:11px;color:var(--muted)" id="splitSummary">Iran bypass ON • 0 custom apps</div>
+  </div>
+  <span style="color:var(--cyan);font-size:12px;font-weight:700" data-i18n="configure">Configure ›</span>
+</div>
+
+<!-- Traffic Quota -->
+<div class="glass card">
+  <div class="row">
+    <div style="font-size:12px;font-weight:700">
+      <span data-i18n="quota">Remaining Traffic</span>
+      <span class="click" style="color:var(--cyan);margin-left:6px" onclick="refreshSub()">🔄</span>
+    </div>
+    <div style="font-size:13px;font-weight:700;color:var(--green)" id="quotaText">--</div>
+  </div>
+  <div class="bar-bg"><div class="bar-fill" id="quotaBar" style="width:0%"></div></div>
+  <div style="font-size:10px;color:var(--muted);margin-top:6px" id="quotaSub">Auto-sync every 12h</div>
+</div>
+
+<div class="grid2">
+  <div class="glass card" style="margin:0">
+    <div style="font-size:11px;color:var(--muted)" data-i18n="speed">Live Speed</div>
+    <div style="font-size:14px;font-weight:700;color:var(--green);margin-top:4px" id="downSpeed">↓ 0 KB/s</div>
+    <div style="font-size:12px;color:var(--cyan)" id="upSpeed">↑ 0 KB/s</div>
+  </div>
+  <div class="glass card click" style="margin:0" onclick="openModal('settingsModal')">
+    <div style="font-size:11px;color:var(--muted)">DNS & MTU</div>
+    <div style="font-size:13px;font-weight:700;margin-top:4px" id="dnsLabel">Auto</div>
+    <div style="font-size:11px;color:var(--muted)" id="mtuLabel">MTU: 1360</div>
+  </div>
+</div>
+
+<div style="height:10px"></div>
+<div class="glass bot-card click" onclick="openBot()">
+  <div>
+    <div style="font-size:13px;font-weight:700" data-i18n="botTitle">Open Echolicense Telegram Bot</div>
+    <div style="font-size:11px;color:var(--muted)" id="botSub">@echopress_bot • Renew & Support</div>
+  </div>
+  <span>✈</span>
+</div>
+
+<!-- Subscriptions Modal -->
+<div class="modal-bg" id="subsModal">
+  <div class="modal">
+    <h2><span>🔗 Subscriptions</span><span class="click" onclick="closeModal('subsModal')">✕</span></h2>
+    <div id="subsList"></div>
+    <div class="divider"></div>
+    <input type="text" id="newSubName" placeholder="Plan name (e.g. Main Plan)" />
+    <textarea id="newSubInput" rows="3" placeholder="Paste sub URL, vless:// or WireGuard [Interface] config..."></textarea>
+    <button class="btn" onclick="addSub()">Add & Load</button>
+  </div>
+</div>
+
+<!-- Servers Modal -->
+<div class="modal-bg" id="serversModal">
+  <div class="modal">
+    <h2><span>🌐 Select Server</span><span class="click" onclick="closeModal('serversModal')">✕</span></h2>
+    <div id="serversList"></div>
+  </div>
+</div>
+
+<!-- Graphical Split Tunneling Modal -->
+<div class="modal-bg" id="splitModal">
+  <div class="modal">
+    <h2><span>🔀 Split Tunneling</span><span class="click" onclick="closeModal('splitModal')">✕</span></h2>
+    <div class="setting-row">
+      <span>Bypass Iranian Sites (.ir)</span>
+      <label class="switch"><input type="checkbox" id="stIran" onchange="saveSplitSettings()"><span class="slider"></span></label>
+    </div>
+    <div class="glass seg" style="margin-top:8px">
+      <div class="seg-btn click" id="splitBypassBtn" onclick="setSplitMode('bypass')">Bypass Selected Apps</div>
+      <div class="seg-btn click" id="splitOnlyBtn" onclick="setSplitMode('only')">Only Selected Apps</div>
+    </div>
+    <input type="text" id="appSearch" placeholder="Search apps (e.g. chrome, cs2, telegram)..." oninput="renderAppsList()" />
+    <div id="appsChecklist" style="max-height:240px;overflow-y:auto;margin-bottom:10px"></div>
+    <button class="btn btn-outline" onclick="browseExe()">+ Add Custom .exe File</button>
+  </div>
+</div>
+
+<!-- Settings Modal (Startup App, Auto-Connect, DNS, MTU, AdBlocker, Mux, Language) -->
+<div class="modal-bg" id="settingsModal">
+  <div class="modal">
+    <h2><span>⚙️ Settings</span><span class="click" onclick="closeModal('settingsModal')">✕</span></h2>
+    <div class="setting-row">
+      <span>Start with Windows (Startup App)</span>
+      <label class="switch"><input type="checkbox" id="setStartup" onchange="saveSettings()"><span class="slider"></span></label>
+    </div>
+    <div class="setting-row">
+      <span>Auto-Connect on Launch</span>
+      <label class="switch"><input type="checkbox" id="setAutoConn" onchange="saveSettings()"><span class="slider"></span></label>
+    </div>
+    <div class="setting-row">
+      <span>AdBlocker (Ads & YouTube)</span>
+      <label class="switch"><input type="checkbox" id="setAdblock" onchange="saveSettings()"><span class="slider"></span></label>
+    </div>
+    <div class="setting-row">
+      <span>Mux Mode (Concurrency: 8)</span>
+      <label class="switch"><input type="checkbox" id="setMux" onchange="saveSettings()"><span class="slider"></span></label>
+    </div>
+    <div class="setting-row">
+      <span>Auto MTU Optimizer</span>
+      <label class="switch"><input type="checkbox" id="setAutoMtu" onchange="saveSettings()"><span class="slider"></span></label>
+    </div>
+    <div class="setting-row">
+      <span>Custom MTU (1200-1500)</span>
+      <input type="number" id="setMtu" style="width:95px;margin:0" min="1200" max="1500" onchange="saveSettings()" />
+    </div>
+    <div class="divider"></div>
+    <div style="font-size:12px;margin-bottom:5px;color:var(--muted)">Manual DNS (leave empty for Auto Failover)</div>
+    <input type="text" id="setDns" placeholder="e.g. 1.1.1.1 or https://1.1.1.1/dns-query" onchange="saveSettings()" />
+    <div class="setting-row">
+      <span>Language</span>
+      <button class="btn btn-outline" style="width:auto;padding:6px 14px" onclick="toggleLang()" id="langBtn">English / فارسی</button>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:8px" id="hwidText">HWID: ...</div>
+  </div>
+</div>
+
+<script>
+let S = {};
+let availableApps = [];
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function fmtTime(sec) {
+  const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+  const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+  const s = String(sec % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+function render(st) {
+  S = st;
+  const isConn = st.connectionState === 'CONNECTED';
+  document.body.classList.toggle('connected', isConn);
+  document.body.classList.toggle('gaming-active', !!st.gamingOnly);
+  document.body.classList.toggle('rtl', st.language === 'fa');
+
+  document.getElementById('statusMsg').textContent = st.statusMessage || '';
+  document.getElementById('timerText').textContent = isConn ? fmtTime(st.connectedSeconds || 0) : (st.language === 'fa' ? 'برای اتصال کلیک کنید' : 'Tap to connect');
+
+  document.getElementById('modeTun').classList.toggle('active', st.mode === 'tun');
+  document.getElementById('modeProxy').classList.toggle('active', st.mode === 'proxy');
+
+  const servers = st.servers || [];
+  const aiCount = servers.filter(x => x.isAiPro).length;
+  const gCount = servers.filter(x => x.isGaming).length || servers.filter(x => x.protocol === 'WIREGUARD').length;
+  document.getElementById('aiSub').textContent = `${aiCount} servers`;
+  document.getElementById('gamingSub').textContent = `WG • ${gCount}`;
+  document.getElementById('aiCard').classList.toggle('on', !!st.aiProOnly);
+  document.getElementById('gamingCard').classList.toggle('on', !!st.gamingOnly);
+  document.getElementById('aiPill').textContent = st.aiProOnly ? 'ON' : 'OFF';
+  document.getElementById('gamingPill').textContent = st.gamingOnly ? 'ON' : 'OFF';
+
+  const activeSrv = servers.find(x => x.id === st.activeServerId);
+  document.getElementById('activeServerName').textContent = activeSrv ? activeSrv.name : 'No server selected';
+  document.getElementById('activeServerMeta').textContent = activeSrv
+    ? `${activeSrv.protocol}${activeSrv.pingMs > 0 ? ' • ' + activeSrv.pingMs + 'ms' : ''}`
+    : 'Add subscription or WireGuard';
+
+  document.getElementById('ksToggle').checked = !!st.killSwitch;
+  document.getElementById('splitSummary').textContent =
+    `${st.iranSplit ? 'Iran bypass ON' : 'Iran bypass OFF'} • ${(st.splitApps || []).length} apps (${st.splitMode})`;
+
+  const info = st.subInfo || {};
+  const used = (info.upload || 0) + (info.download || 0);
+  const total = info.total || 0;
+  if (total > 0) {
+    const remGb = Math.max(0, total - used) / (1024 ** 3);
+    const totGb = total / (1024 ** 3);
+    document.getElementById('quotaText').textContent = `${remGb.toFixed(2)} / ${totGb.toFixed(1)} GB`;
+    document.getElementById('quotaBar').style.width = `${Math.max(0, 100 - (used / total) * 100)}%`;
+  } else if (info.hasInfo) {
+    document.getElementById('quotaText').textContent = `Unlimited (${(used / (1024 ** 3)).toFixed(2)} GB)`;
+    document.getElementById('quotaBar').style.width = '100%';
+  } else {
+    document.getElementById('quotaText').textContent = '--';
+    document.getElementById('quotaBar').style.width = '0%';
+  }
+
+  document.getElementById('downSpeed').textContent = `↓ ${st.downKbps || 0} KB/s`;
+  document.getElementById('upSpeed').textContent = `↑ ${st.upKbps || 0} KB/s`;
+  document.getElementById('dnsLabel').textContent = st.manualDns || st.activeDns || 'Auto';
+  document.getElementById('mtuLabel').textContent = `MTU: ${st.mtu || 1360} ${st.autoMtu ? '(Auto)' : ''}`;
+  document.getElementById('botSub').textContent = `@${st.botUsername || 'echopress_bot'} • Renew & Support`;
+
+  // Banner
+  const b = st.announcement;
+  const bBox = document.getElementById('bannerBox');
+  if (b && b.active) {
+    bBox.style.display = 'block';
+    document.getElementById('bannerTitle').textContent = b.title || '';
+    document.getElementById('bannerMsg').textContent = b.message || '';
+    let actHtml = '';
+    if (b.promo_code) actHtml += `<span class="chip click" onclick="navigator.clipboard.writeText('${b.promo_code}')">📋 ${b.promo_code}</span>`;
+    if (b.button_text) actHtml += `<span class="chip click" style="border-color:var(--green);color:#fff" onclick="openExternal('${b.action_url || ''}')">${b.button_text}</span>`;
+    document.getElementById('bannerActions').innerHTML = actHtml;
+  } else {
+    bBox.style.display = 'none';
+  }
+
+  // Settings sync
+  document.getElementById('setStartup').checked = !!st.startupApp;
+  document.getElementById('setAutoConn').checked = !!st.autoConnect;
+  document.getElementById('setAdblock').checked = !!st.adBlocker;
+  document.getElementById('setMux').checked = !!(st.mux && st.mux.enabled);
+  document.getElementById('setAutoMtu').checked = !!st.autoMtu;
+  if (document.activeElement.id !== 'setMtu') document.getElementById('setMtu').value = st.mtu || 1360;
+  if (document.activeElement.id !== 'setDns') document.getElementById('setDns').value = st.manualDns || '';
+  document.getElementById('hwidText').textContent = `HWID: ${st.hwid || ''}`;
+
+  // Subscriptions list
+  document.getElementById('subsList').innerHTML = (st.subscriptions || []).map(sub => `
+    <div class="list-item ${sub.id === st.activeSubId ? 'selected' : ''}">
+      <div class="click" style="flex:1;overflow:hidden" onclick="switchSub('${sub.id}')">
+        <div style="font-weight:700">${sub.name}</div>
+        <div style="font-size:10px;color:var(--cyan);overflow:hidden;text-overflow:ellipsis">${sub.url}</div>
+      </div>
+      <span class="click" style="color:var(--gaming);padding:4px 8px" onclick="deleteSub('${sub.id}')">🗑</span>
+    </div>
+  `).join('') || '<div style="font-size:12px;color:var(--muted)">No saved subscriptions</div>';
+
+  // Servers list
+  const visible = st.gamingOnly
+    ? (servers.filter(x => x.isGaming).length ? servers.filter(x => x.isGaming) : servers.filter(x => x.protocol === 'WIREGUARD'))
+    : (st.aiProOnly ? servers.filter(x => x.isAiPro) : servers);
+  document.getElementById('serversList').innerHTML = visible.map(srv => `
+    <div class="list-item click ${srv.id === st.activeServerId ? 'selected' : ''}" onclick="selectSrv('${srv.id}')">
+      <div>
+        <div style="font-weight:600">${srv.name}</div>
+        <div style="font-size:10px;color:var(--muted)">${srv.protocol}</div>
+      </div>
+      <span style="color:var(--green)">${srv.pingMs > 0 ? srv.pingMs + ' ms' : ''}</span>
+    </div>
+  `).join('') || '<div style="font-size:12px;color:var(--muted)">No servers found</div>';
+}
+
+async function toggleConnect() { render(await pywebview.api.toggle_connect()); }
+async function setMode(m) { render(await pywebview.api.set_mode(m)); }
+async function toggleAiPro() { render(await pywebview.api.toggle_ai_pro()); }
+async function toggleGaming() { render(await pywebview.api.toggle_gaming()); }
+async function toggleKillSwitch(v) { render(await pywebview.api.toggle_killswitch(v)); }
+async function pingAll() { render(await pywebview.api.ping_all()); }
+async function refreshSub() { render(await pywebview.api.refresh_subscription()); }
+async function selectSrv(id) { closeModal('serversModal'); render(await pywebview.api.select_server(id)); }
+async function switchSub(id) { closeModal('subsModal'); render(await pywebview.api.switch_subscription(id)); }
+async function deleteSub(id) { render(await pywebview.api.delete_subscription(id)); }
+async function addSub() {
+  const name = document.getElementById('newSubName').value;
+  const raw = document.getElementById('newSubInput').value;
+  if (!raw.trim()) return;
+  document.getElementById('newSubName').value = '';
+  document.getElementById('newSubInput').value = '';
+  closeModal('subsModal');
+  render(await pywebview.api.add_subscription(name, raw));
+}
+async function saveSettings() {
+  const patch = {
+    startupApp: document.getElementById('setStartup').checked,
+    autoConnect: document.getElementById('setAutoConn').checked,
+    adBlocker: document.getElementById('setAdblock').checked,
+    autoMtu: document.getElementById('setAutoMtu').checked,
+    mtu: parseInt(document.getElementById('setMtu').value) || 1360,
+    manualDns: document.getElementById('setDns').value.trim(),
+    mux: { enabled: document.getElementById('setMux').checked, concurrency: 8, xudp: 16 },
+  };
+  render(await pywebview.api.update_settings(patch));
+}
+async function toggleLang() {
+  const next = S.language === 'fa' ? 'en' : 'fa';
+  render(await pywebview.api.update_settings({ language: next }));
+}
+async function openSplitModal() {
+  availableApps = await pywebview.api.get_running_apps();
+  document.getElementById('stIran').checked = !!S.iranSplit;
+  document.getElementById('splitBypassBtn').classList.toggle('active', S.splitMode !== 'only');
+  document.getElementById('splitOnlyBtn').classList.toggle('active', S.splitMode === 'only');
+  renderAppsList();
+  openModal('splitModal');
+}
+function renderAppsList() {
+  const q = (document.getElementById('appSearch').value || '').toLowerCase();
+  const chosen = new Set(S.splitApps || []);
+  const all = Array.from(new Set([...chosen, ...availableApps])).filter(a => a.toLowerCase().includes(q));
+  document.getElementById('appsChecklist').innerHTML = all.map(app => `
+    <label class="list-item click">
+      <span>${app}</span>
+      <input type="checkbox" ${chosen.has(app) ? 'checked' : ''} onchange="toggleSplitApp('${app}', this.checked)" />
+    </label>
+  `).join('');
+}
+async function toggleSplitApp(app, checked) {
+  const set = new Set(S.splitApps || []);
+  if (checked) set.add(app); else set.delete(app);
+  render(await pywebview.api.update_settings({ splitApps: Array.from(set) }));
+  renderAppsList();
+}
+async function setSplitMode(mode) {
+  render(await pywebview.api.update_settings({ splitMode: mode }));
+  document.getElementById('splitBypassBtn').classList.toggle('active', mode !== 'only');
+  document.getElementById('splitOnlyBtn').classList.toggle('active', mode === 'only');
+}
+async function saveSplitSettings() {
+  render(await pywebview.api.update_settings({ iranSplit: document.getElementById('stIran').checked }));
+}
+async function browseExe() {
+  render(await pywebview.api.browse_exe_for_split());
+  renderAppsList();
+}
+async function dismissBanner() {
+  if (S.announcement) render(await pywebview.api.dismiss_announcement(S.announcement.id));
+}
+function openBot() { pywebview.api.open_url(`https://t.me/${S.botUsername || 'echopress_bot'}`); }
+function openExternal(url) { if (url) pywebview.api.open_url(url); }
+
+window.addEventListener('pywebviewready', async () => {
+  render(await pywebview.api.get_state());
+  setInterval(async () => { render(await pywebview.api.get_state()); }, 1500);
+});
+</script>
+</body>
+</html>

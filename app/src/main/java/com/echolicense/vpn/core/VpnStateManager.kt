@@ -21,6 +21,7 @@ data class VpnUiState(
     val iranSplitEnabled: Boolean = true,
     val adBlockerEnabled: Boolean = true,
     val aiProOnly: Boolean = false,
+    val gamingOnly: Boolean = false,
     val autoMtuEnabled: Boolean = true,
     val mtu: Int = 1360,
     val muxConfig: MuxConfig = MuxConfig(),

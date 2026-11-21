@@ -164,6 +164,7 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onToggleAiPro = { handleToggleAiPro() },
+                    onToggleGaming = { handleToggleGaming() },
                     onToggleAutoMtu = { enabled ->
                         prefs.edit().putBoolean(KEY_AUTO_MTU, enabled).apply()
                         VpnStateManager.update { it.copy(autoMtuEnabled = enabled) }
@@ -378,10 +379,42 @@ class MainActivity : ComponentActivity() {
             }
             val bestAi = aiServers.first()
             val isConnected = current.connectionState == ConnectionState.CONNECTED
-            VpnStateManager.update { it.copy(aiProOnly = true, activeServer = bestAi) }
+            VpnStateManager.update { it.copy(aiProOnly = true, gamingOnly = false, activeServer = bestAi) }
             if (isConnected) dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT) else startVpnWithPermission()
         } else {
             VpnStateManager.update { it.copy(aiProOnly = false) }
+        }
+    }
+
+
+    private fun handleToggleGaming() {
+        val current = VpnStateManager.state.value
+        val nextEnabled = !current.gamingOnly
+        if (nextEnabled) {
+            val gamingServers = current.servers.filter { it.isGaming() }
+                .ifEmpty { current.servers.filter { it.protocol == VpnProtocol.WIREGUARD } }
+            if (gamingServers.isEmpty()) {
+                VpnStateManager.update {
+                    it.copy(
+                        gamingOnly = false,
+                        statusMessage = if (it.language == AppLanguage.EN) "No Gaming WireGuard config found" else "کانفیگ گیمینگ وایرگارد یافت نشد"
+                    )
+                }
+                return
+            }
+            val bestGaming = gamingServers.first()
+            val isConnected = current.connectionState == ConnectionState.CONNECTED
+            VpnStateManager.update {
+                it.copy(
+                    gamingOnly = true,
+                    aiProOnly = false,
+                    activeServer = bestGaming,
+                    statusMessage = if (it.language == AppLanguage.EN) "Gaming Mode (${bestGaming.name})" else "حالت گیمینگ (${bestGaming.name})"
+                )
+            }
+            if (isConnected) dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT) else startVpnWithPermission()
+        } else {
+            VpnStateManager.update { it.copy(gamingOnly = false) }
         }
     }
 
