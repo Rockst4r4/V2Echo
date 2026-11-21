@@ -7,6 +7,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -20,13 +21,15 @@ class SubscriptionRepository {
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 
     suspend fun fetchSubscription(subUrl: String): Pair<SubscriptionInfo, List<ServerProfile>> =
         withContext(Dispatchers.IO) {
             val req = Request.Builder()
                 .url(subUrl.trim())
-                .header("User-Agent", "EcholicenseVPN/1.1 (v2rayNG compatible)")
+                .header("User-Agent", "v2rayNG/1.9.15")
+                .header("Accept", "*/*")
                 .build()
 
             httpClient.newCall(req).execute().use { resp ->
@@ -34,33 +37,62 @@ class SubscriptionRepository {
                     throw IllegalStateException("خطای دریافت اشتراک (کد ${resp.code})")
                 }
 
-                val userInfoHeader = resp.header("Subscription-Userinfo")
-                    ?: resp.header("subscription-userinfo")
-                    ?: ""
-                val subInfo = parseUserInfoHeader(subUrl, userInfoHeader)
-
+                val userInfoHeader = extractUserInfoFromResponseChain(resp)
                 val bodyRaw = resp.body?.string()?.trim().orEmpty()
                 val decodedText = tryDecodeBase64(bodyRaw)
+
+                val subInfo = if (userInfoHeader.isNotBlank()) {
+                    parseUserInfoHeader(subUrl, userInfoHeader)
+                } else {
+                    extractUserInfoFromBody(subUrl, decodedText)
+                }
+
                 val profiles = parseServerLines(decodedText)
                 subInfo to profiles
             }
         }
+
+    private fun extractUserInfoFromResponseChain(response: Response): String {
+        var current: Response? = response
+        while (current != null) {
+            val h = current.headers
+            for (i in 0 until h.size) {
+                val name = h.name(i).lowercase()
+                if (name == "subscription-userinfo" || name == "x-subscription-userinfo") {
+                    val v = h.value(i).trim()
+                    if (v.isNotBlank()) return v
+                }
+            }
+            current = current.priorResponse
+        }
+        return ""
+    }
+
+    private fun extractUserInfoFromBody(subUrl: String, decodedText: String): SubscriptionInfo {
+        val match = Regex("""upload\s*=\s*\d+.*total\s*=\s*\d+""", RegexOption.IGNORE_CASE).find(decodedText)
+        if (match != null) {
+            return parseUserInfoHeader(subUrl, match.value)
+        }
+        return SubscriptionInfo(subUrl = subUrl, hasUserInfo = false)
+    }
 
     fun parseUserInfoHeader(subUrl: String, header: String): SubscriptionInfo {
         var upload = 0L
         var download = 0L
         var total = 0L
         var expire = 0L
+        var foundAny = false
 
         header.split(";").forEach { part ->
             val kv = part.trim().split("=", limit = 2)
             if (kv.size == 2) {
-                val value = kv[1].trim().toLongOrNull() ?: 0L
+                val rawVal = kv[1].trim()
+                val value = rawVal.toLongOrNull() ?: rawVal.toDoubleOrNull()?.toLong() ?: 0L
                 when (kv[0].trim().lowercase()) {
-                    "upload" -> upload = value
-                    "download" -> download = value
-                    "total" -> total = value
-                    "expire" -> expire = value
+                    "upload" -> { upload = value; foundAny = true }
+                    "download" -> { download = value; foundAny = true }
+                    "total" -> { total = value; foundAny = true }
+                    "expire" -> { expire = value; foundAny = true }
                 }
             }
         }
@@ -69,7 +101,8 @@ class SubscriptionRepository {
             uploadBytes = upload,
             downloadBytes = download,
             totalBytes = total,
-            expireTimestampSec = expire
+            expireTimestampSec = expire,
+            hasUserInfo = foundAny
         )
     }
 

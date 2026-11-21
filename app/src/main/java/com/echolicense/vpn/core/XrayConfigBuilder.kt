@@ -2,6 +2,7 @@ package com.echolicense.vpn.core
 
 import android.util.Base64
 import com.echolicense.vpn.data.DnsProvider
+import com.echolicense.vpn.data.MuxConfig
 import com.echolicense.vpn.data.ServerProfile
 import com.echolicense.vpn.data.VpnProtocol
 import org.json.JSONArray
@@ -18,6 +19,7 @@ object XrayConfigBuilder {
         primaryDns: DnsProvider,
         enableIranSplit: Boolean,
         mtu: Int,
+        muxConfig: MuxConfig,
         hasGeoFiles: Boolean
     ): String {
         val root = JSONObject()
@@ -40,10 +42,13 @@ object XrayConfigBuilder {
                     .put("domains", irDomains)
             )
         }
-        dnsServers.put(primaryDns.dohUrl)
-        dnsServers.put(primaryDns.ipv4)
-        dnsServers.put("8.8.8.8")
-        dnsServers.put("localhost")
+
+        val addedDns = linkedSetOf<String>()
+        if (primaryDns.dohUrl.isNotBlank()) addedDns.add(primaryDns.dohUrl)
+        if (primaryDns.ipv4.isNotBlank()) addedDns.add(primaryDns.ipv4)
+        addedDns.add("8.8.8.8")
+        addedDns.add("localhost")
+        addedDns.forEach { dnsServers.put(it) }
 
         root.put(
             "dns",
@@ -77,8 +82,21 @@ object XrayConfigBuilder {
         val proxyOutbound = when (profile.protocol) {
             VpnProtocol.WIREGUARD -> buildWireGuardOutbound(profile, safeMtu)
             VpnProtocol.VMESS -> buildVmessOutbound(profile)
-            VpnProtocol.VLESS, VpnProtocol.TROJAN -> buildUriOutbound(profile)
+            VpnProtocol.VLESS, VpnProtocol.TROJAN -> buildUriOutbound(profile, muxConfig.enabled)
         }
+
+        // اعمال سازوکار Mux Mode روی VLESS / VMess / Trojan (WireGuard از Mux پشتیبانی نمی‌کند)
+        if (muxConfig.enabled && profile.protocol != VpnProtocol.WIREGUARD) {
+            proxyOutbound.put(
+                "mux",
+                JSONObject()
+                    .put("enabled", true)
+                    .put("concurrency", muxConfig.concurrency.coerceIn(1, 64))
+                    .put("xudpConcurrency", muxConfig.xudpConcurrency.coerceIn(1, 64))
+                    .put("xudpProxyUDP443", muxConfig.xudpProxyUDP443)
+            )
+        }
+
         outbounds.put(proxyOutbound)
         outbounds.put(
             JSONObject()
@@ -188,18 +206,14 @@ object XrayConfigBuilder {
         if (endpoint.isBlank()) {
             endpoint = if (profile.host.contains(":")) "[${profile.host}]:${profile.port}" else "${profile.host}:${profile.port}"
         }
-        if (addresses.isEmpty()) {
-            addresses.add("10.0.0.2/32")
-        }
+        if (addresses.isEmpty()) addresses.add("10.0.0.2/32")
 
         val peer = JSONObject()
             .put("publicKey", publicKey)
             .put("endpoint", endpoint)
             .put("keepAlive", keepAlive.coerceAtLeast(10))
             .put("allowedIPs", JSONArray().put("0.0.0.0/0").put("::/0"))
-        if (preSharedKey.isNotBlank()) {
-            peer.put("preSharedKey", preSharedKey)
-        }
+        if (preSharedKey.isNotBlank()) peer.put("preSharedKey", preSharedKey)
 
         val settings = JSONObject()
             .put("secretKey", secretKey)
@@ -295,7 +309,7 @@ object XrayConfigBuilder {
             )
     }
 
-    private fun buildUriOutbound(profile: ServerProfile): JSONObject {
+    private fun buildUriOutbound(profile: ServerProfile, muxEnabled: Boolean): JSONObject {
         val baseUri = profile.rawConfig.substringBefore("#").replace(" ", "%20")
         val uri = URI(baseUri)
         val params = (uri.rawQuery ?: "").split("&").mapNotNull { kv ->
@@ -386,7 +400,11 @@ object XrayConfigBuilder {
             val user = JSONObject()
                 .put("id", userSecret)
                 .put("encryption", params["encryption"] ?: "none")
-            params["flow"]?.takeIf { it.isNotBlank() }?.let { user.put("flow", it) }
+            val rawFlow = params["flow"]?.trim().orEmpty()
+            // در Xray-core ترکیب xtls-rprx-vision با mux مجاز نیست؛ هنگام فعال بودن Mux فیلد flow حذف می‌شود
+            if (rawFlow.isNotBlank() && !(muxEnabled && rawFlow.contains("vision", ignoreCase = true))) {
+                user.put("flow", rawFlow)
+            }
 
             outbound.put("protocol", "vless").put(
                 "settings",

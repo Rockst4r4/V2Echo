@@ -10,6 +10,8 @@ import java.net.Socket
 import java.util.concurrent.TimeUnit
 
 object SmartDnsManager {
+    private val IPV4_REGEX = Regex("""^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$""")
+
     private val dnsPool = listOf(
         DnsProvider("Cloudflare", "1.1.1.1", "https://1.1.1.1/dns-query"),
         DnsProvider("Quad9", "9.9.9.9", "https://dns.quad9.net/dns-query"),
@@ -26,6 +28,23 @@ object SmartDnsManager {
         .readTimeout(1500, TimeUnit.MILLISECONDS)
         .build()
 
+    fun isValidIpv4(value: String): Boolean = IPV4_REGEX.matches(value.trim())
+
+    suspend fun resolveDns(manualDns: String): DnsProvider = withContext(Dispatchers.IO) {
+        val trimmed = manualDns.trim()
+        if (trimmed.isNotEmpty()) {
+            return@withContext if (trimmed.startsWith("https://", ignoreCase = true)) {
+                DnsProvider(name = "دستی (DoH)", ipv4 = "1.1.1.1", dohUrl = trimmed, latencyMs = 0)
+            } else if (isValidIpv4(trimmed)) {
+                val ping = probeTcp(trimmed)
+                DnsProvider(name = "دستی", ipv4 = trimmed, dohUrl = trimmed, latencyMs = ping.coerceAtLeast(0))
+            } else {
+                resolveBestWorkingDns()
+            }
+        }
+        resolveBestWorkingDns()
+    }
+
     suspend fun resolveBestWorkingDns(): DnsProvider = withContext(Dispatchers.IO) {
         for (provider in dnsPool) {
             val latency = probeDns(provider)
@@ -36,16 +55,18 @@ object SmartDnsManager {
         dnsPool.first().copy(latencyMs = 0)
     }
 
-    private fun probeDns(provider: DnsProvider): Int {
-        val tcpTime = try {
+    private fun probeTcp(ip: String): Int {
+        return try {
             val start = System.currentTimeMillis()
-            Socket().use { s ->
-                s.connect(InetSocketAddress(provider.ipv4, 443), 1200)
-            }
+            Socket().use { s -> s.connect(InetSocketAddress(ip, 443), 1200) }
             (System.currentTimeMillis() - start).toInt()
         } catch (_: Exception) {
             -1
         }
+    }
+
+    private fun probeDns(provider: DnsProvider): Int {
+        val tcpTime = probeTcp(provider.ipv4)
         if (tcpTime > 0) return tcpTime
 
         return try {

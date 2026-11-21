@@ -1,9 +1,6 @@
 package com.echolicense.vpn.core
 
-import com.echolicense.vpn.data.ConnectionState
-import com.echolicense.vpn.data.DnsProvider
-import com.echolicense.vpn.data.ServerProfile
-import com.echolicense.vpn.data.SubscriptionInfo
+import com.echolicense.vpn.data.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,11 +9,16 @@ data class VpnUiState(
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val activeServer: ServerProfile? = null,
     val servers: List<ServerProfile> = emptyList(),
+    val currentSubUrl: String = "",
     val subscriptionInfo: SubscriptionInfo = SubscriptionInfo(),
     val activeDns: DnsProvider? = null,
+    val manualDns: String = "",
     val iranSplitEnabled: Boolean = true,
     val aiProOnly: Boolean = false,
     val mtu: Int = 1400,
+    val muxConfig: MuxConfig = MuxConfig(),
+    val announcement: DynamicAnnouncement? = null,
+    val botUsername: String = "echopress_bot",
     val downloadSpeedKbps: Long = 0L,
     val uploadSpeedKbps: Long = 0L,
     val connectedSeconds: Long = 0L,

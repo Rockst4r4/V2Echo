@@ -72,40 +72,45 @@ class EcholicenseVpnService : VpnService() {
         val mtu = current.mtu.coerceIn(1200, 1500)
 
         createNotificationChannel()
-        startForeground(NOTIF_ID, buildNotification("در حال انتخاب بهترین DNS و اتصال..."))
+        startForeground(NOTIF_ID, buildNotification("در حال تنظیم DNS و اتصال..."))
 
         VpnStateManager.update {
-            it.copy(connectionState = ConnectionState.CONNECTING, statusMessage = "در حال تست DNS خودکار...")
+            it.copy(
+                connectionState = ConnectionState.CONNECTING,
+                statusMessage = if (current.manualDns.isNotBlank()) "اتصال با DNS دستی..." else "در حال تست DNS خودکار..."
+            )
         }
 
         connectJob?.cancel()
         connectJob = scope.launch {
             try {
                 val hasGeoFiles = ensureGeoAssetsCopied()
-                val bestDns = SmartDnsManager.resolveBestWorkingDns()
+                val resolvedDns = SmartDnsManager.resolveDns(current.manualDns)
                 VpnStateManager.update {
                     it.copy(
-                        activeDns = bestDns,
-                        statusMessage = "اتصال ${server.protocol.name} (MTU $mtu) • DNS ${bestDns.name}"
+                        activeDns = resolvedDns,
+                        statusMessage = "اتصال ${server.protocol.name} (MTU $mtu) • DNS ${resolvedDns.name}"
                     )
                 }
 
                 val configJson = XrayConfigBuilder.buildConfigJson(
                     profile = server,
-                    primaryDns = bestDns,
+                    primaryDns = resolvedDns,
                     enableIranSplit = current.iranSplitEnabled,
                     mtu = mtu,
+                    muxConfig = current.muxConfig,
                     hasGeoFiles = hasGeoFiles
                 )
                 startXrayTun(
                     configJson = configJson,
-                    dnsIp = bestDns.ipv4,
+                    dnsIp = resolvedDns.ipv4,
                     mtu = mtu,
                     enableIranSplit = current.iranSplitEnabled
                 )
 
                 VpnStateManager.setConnected()
-                updateNotification("متصل به ${server.name} • MTU: $mtu")
+                val muxLabel = if (current.muxConfig.enabled) " • Mux" else ""
+                updateNotification("متصل به ${server.name} • MTU: $mtu$muxLabel")
                 startTelemetryLoop()
 
             } catch (e: CancellationException) {
@@ -129,12 +134,13 @@ class EcholicenseVpnService : VpnService() {
         mtu: Int,
         enableIranSplit: Boolean
     ) {
+        val safeDnsIp = if (SmartDnsManager.isValidIpv4(dnsIp)) dnsIp else "1.1.1.1"
         val builder = Builder()
             .setSession("Echolicense VPN")
             .setMtu(mtu)
             .addAddress("10.10.10.2", 30)
             .addRoute("0.0.0.0", 0)
-            .addDnsServer(dnsIp)
+            .addDnsServer(safeDnsIp)
             .addDnsServer("1.0.0.1")
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
