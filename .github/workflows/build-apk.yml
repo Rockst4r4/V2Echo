@@ -18,13 +18,15 @@ jobs:
           distribution: 'temurin'
 
       - name: Download libv2ray.aar & Iran Geo Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p app/libs app/src/main/assets
-          curl -sL "https://api.github.com/repos/2dust/AndroidLibXrayLite/releases/latest" \
-            | grep "browser_download_url.*aar" | head -n 1 | cut -d '"' -f 4 \
-            | xargs curl -L -o app/libs/libv2ray.aar
-          curl -L -o app/src/main/assets/geoip.dat "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geoip.dat"
-          curl -L -o app/src/main/assets/geosite.dat "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geosite.dat"
+          AAR_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/2dust/AndroidLibXrayLite/releases/latest" | grep "browser_download_url.*aar" | head -n 1 | cut -d '"' -f 4)
+          echo "Downloading AAR from: $AAR_URL"
+          curl -fL -o app/libs/libv2ray.aar "$AAR_URL"
+          curl -fL -o app/src/main/assets/geoip.dat "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geoip.dat"
+          curl -fL -o app/src/main/assets/geosite.dat "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geosite.dat"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
