@@ -1,7 +1,32 @@
 #!/usr/bin/env python3
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+try:
+    import readline  # noqa: F401
+except Exception:
+    pass
+
+if sys.stdin.isatty():
+    subprocess.run(["stty", "iutf8"], stderr=subprocess.DEVNULL)
+
+try:
+    sys.stdin.reconfigure(encoding="utf-8", errors="ignore")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+
+def ask(prompt: str) -> str:
+    try:
+        return input(prompt).replace("\ufffd", "").strip()
+    except UnicodeDecodeError:
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        return sys.stdin.buffer.readline().decode("utf-8", errors="ignore").strip()
+
 
 repo_dir = Path.home() / "EcholicenseVPN"
 f = repo_dir / "announcements.json"
@@ -16,7 +41,7 @@ next_id = int(cur.get("id") or 0) + 1
 print(f"\n=== Send New Notification (ID: #{next_id}) ===")
 print("(Type 'off' as Title to disable the current banner)\n")
 
-title = input("Title: ").strip()
+title = ask("Title: ")
 if not title:
     print("Cancelled (empty title).")
     raise SystemExit(1)
@@ -32,17 +57,17 @@ if title.lower() == "off":
     print("Done! Banner disabled for all users.")
     raise SystemExit(0)
 
-message = input("Message: ").strip()
-promo = input("Promo Code (optional, press Enter to skip): ").strip()
-btn = input("Banner Button Text (optional, e.g. Open Bot): ").strip()
-url = input("Click URL [default: https://t.me/echopress_bot]: ").strip() or "https://t.me/echopress_bot"
+message = ask("Message: ")
+promo = ask("Promo Code (optional, press Enter to skip): ")
+btn = ask("Banner Button Text (optional, e.g. Open Bot): ")
+url = ask("Click URL [default: https://t.me/echopress_bot]: ") or "https://t.me/echopress_bot"
 
-target = (input("Target platform (all / android / pc) [default: all]: ").strip().lower() or "all")
+target = (ask("Target platform (all / android / pc) [default: all]: ").lower() or "all")
 if target not in ("all", "android", "pc"):
     target = "all"
 
-push_ans = (input("Send system push notification? (y/n) [default: y]: ").strip().lower() or "y")
-banner_ans = (input("Show in-app banner? (y/n) [default: y]: ").strip().lower() or "y")
+push_ans = (ask("Send system push notification? (y/n) [default: y]: ").lower() or "y")
+banner_ans = (ask("Show in-app banner? (y/n) [default: y]: ").lower() or "y")
 
 payload = {
     "id": next_id,
