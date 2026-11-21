@@ -162,7 +162,7 @@ jobs:
         shell: pwsh
         working-directory: pc
         run: |
-          pyinstaller --noconfirm --onefile --windowed --uac-admin --name "EcholicenseVPN" --icon "assets\icon.ico" --add-data "ui;ui" main.py
+          pyinstaller --noconfirm --onefile --windowed --uac-admin --name "EcholicenseVPN" --icon "assets\icon.ico" --add-data "ui;ui" --add-data "assets;assets" main.py
           New-Item -ItemType Directory -Force -Path "release_pkg" | Out-Null
           Copy-Item "dist\EcholicenseVPN.exe" -Destination "release_pkg\"
           Copy-Item "sing-box.exe" -Destination "release_pkg\"

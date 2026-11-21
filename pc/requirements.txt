@@ -3,3 +3,4 @@ requests>=2.32.3
 psutil>=6.1.0
 pillow>=10.4.0
 pyinstaller>=6.11.0
+pystray>=0.19.5

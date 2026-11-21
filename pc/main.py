@@ -20,6 +20,14 @@ import psutil
 import requests
 import webview
 
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+except ImportError:
+    pystray = None
+    Image = None
+    ImageDraw = None
+
 from singbox_config import build_singbox_config
 
 try:
@@ -28,7 +36,7 @@ except ImportError:
     winreg = None
 
 APP_NAME = "EcholicenseVPN"
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -280,6 +288,9 @@ class EcholicenseApi:
         self._last_net = psutil.net_io_counters()
         self._last_net_ts = time.time()
         self._window = None
+        self._tray = None
+        self._quitting = False
+        self._last_tray_sig = None
 
         self._state = self._load_saved_state()
         self._state["connectionState"] = "DISCONNECTED"
@@ -577,6 +588,12 @@ class EcholicenseApi:
     def _show_windows_toast(self, title: str, message: str):
         if os.name != "nt":
             return
+        if self._tray is not None:
+            try:
+                self._tray.notify((message or "New notification")[:250], (title or "Echolicense VPN")[:63])
+                return
+            except Exception:
+                pass
         def _worker():
             ps = (
                 "Add-Type -AssemblyName System.Windows.Forms;"
@@ -708,6 +725,7 @@ class EcholicenseApi:
         out["downKbps"] = down_kbps if self._state["connectionState"] == "CONNECTED" else 0
         out["upKbps"] = up_kbps if self._state["connectionState"] == "CONNECTED" else 0
         out["connectedSeconds"] = connected_sec
+        self._sync_tray()
         return out
 
     def toggle_connect(self) -> dict:
@@ -1135,6 +1153,114 @@ class EcholicenseApi:
             self._ping_trigger.set()
         return self.get_state()
 
+
+    def _build_tray_image(self, conn_state: str, gaming: bool):
+        if Image is None:
+            return None
+        icon_path = get_resource_dir() / "assets" / "icon.png"
+        if icon_path.exists():
+            img = Image.open(icon_path).convert("RGBA").resize((64, 64), Image.LANCZOS)
+        else:
+            img = Image.new("RGBA", (64, 64), (17, 25, 31, 255))
+            d = ImageDraw.Draw(img)
+            d.ellipse((8, 8, 56, 56), outline=(34, 228, 255, 255), width=5)
+
+        if conn_state == "CONNECTED":
+            dot_color = (255, 90, 110, 255) if gaming else (0, 229, 163, 255)
+            d = ImageDraw.Draw(img)
+            d.ellipse((40, 40, 62, 62), fill=(10, 16, 22, 255))
+            d.ellipse((43, 43, 59, 59), fill=dot_color)
+        elif conn_state == "ERROR":
+            d = ImageDraw.Draw(img)
+            d.ellipse((40, 40, 62, 62), fill=(10, 16, 22, 255))
+            d.ellipse((43, 43, 59, 59), fill=(255, 176, 32, 255))
+        return img
+
+    def _sync_tray(self):
+        if self._tray is None:
+            return
+        sig = (
+            self._state.get("connectionState"),
+            bool(self._state.get("gamingOnly")),
+            self._state.get("mode"),
+        )
+        if sig == self._last_tray_sig:
+            return
+        self._last_tray_sig = sig
+        try:
+            img = self._build_tray_image(sig[0], sig[1])
+            if img is not None:
+                self._tray.icon = img
+            status_lbl = "Connected" if sig[0] == "CONNECTED" else "Disconnected"
+            mode_lbl = "TUN" if sig[2] == "tun" else "Proxy"
+            self._tray.title = f"Echolicense VPN ({status_lbl} • {mode_lbl})"
+            self._tray.update_menu()
+        except Exception:
+            pass
+
+    def show_window(self, *_args):
+        if self._window is not None:
+            try:
+                self._window.show()
+                self._window.restore()
+            except Exception:
+                pass
+
+    def quit_app(self, *_args):
+        self._quitting = True
+        try:
+            self.disconnect()
+            self._clear_killswitch_rules()
+        except Exception:
+            pass
+        if self._tray is not None:
+            try:
+                self._tray.stop()
+            except Exception:
+                pass
+            self._tray = None
+        if self._window is not None:
+            try:
+                self._window.destroy()
+            except Exception:
+                pass
+        os._exit(0)
+
+    def start_tray(self):
+        if pystray is None or self._tray is not None:
+            return
+        try:
+            img = self._build_tray_image(self._state.get("connectionState"), bool(self._state.get("gamingOnly")))
+            menu = pystray.Menu(
+                pystray.MenuItem("Open Echolicense", lambda icon, item: self.show_window(), default=True),
+                pystray.MenuItem(
+                    lambda item: "Disconnect" if self._state.get("connectionState") == "CONNECTED" else "Connect",
+                    lambda icon, item: threading.Thread(target=self.toggle_connect, daemon=True).start(),
+                ),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem(
+                    "TUN Mode (Real Ping)",
+                    lambda icon, item: threading.Thread(target=self.set_mode, args=("tun",), daemon=True).start(),
+                    checked=lambda item: self._state.get("mode") == "tun",
+                ),
+                pystray.MenuItem(
+                    "System Proxy",
+                    lambda icon, item: threading.Thread(target=self.set_mode, args=("proxy",), daemon=True).start(),
+                    checked=lambda item: self._state.get("mode") == "proxy",
+                ),
+                pystray.MenuItem(
+                    "Gaming Mode (WireGuard)",
+                    lambda icon, item: threading.Thread(target=self.toggle_gaming, daemon=True).start(),
+                    checked=lambda item: bool(self._state.get("gamingOnly")),
+                ),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Exit", lambda icon, item: threading.Thread(target=self.quit_app, daemon=True).start()),
+            )
+            self._tray = pystray.Icon(APP_NAME, img, f"Echolicense VPN v{APP_VERSION}", menu)
+            self._tray.run_detached()
+        except Exception:
+            self._tray = None
+
     def open_url(self, url: str):
         webbrowser.open(url)
 
@@ -1143,7 +1269,7 @@ def main():
     api = EcholicenseApi()
     index_html = str(get_resource_dir() / "ui" / "index.html")
     win = webview.create_window(
-        title="Echolicense VPN v1.3",
+        title="Echolicense VPN v1.4",
         url=index_html,
         js_api=api,
         width=460,
@@ -1152,7 +1278,18 @@ def main():
         background_color="#0A1016",
     )
     api._window = win
-    webview.start(debug=False)
+
+    def on_closing():
+        if not api._quitting and api._tray is not None:
+            try:
+                win.hide()
+                return False
+            except Exception:
+                pass
+        return True
+
+    win.events.closing += on_closing
+    webview.start(api.start_tray, debug=False)
 
 
 if __name__ == "__main__":
