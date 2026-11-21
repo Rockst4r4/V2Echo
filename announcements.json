@@ -1,13 +1,13 @@
 {
-  "id": 2,
+  "id": 3,
   "active": true,
   "target": "all",
   "push_notification": true,
   "show_banner": true,
-  "title": "عنوان",
-  "message": "تست مسیج",
-  "promo_code": "renew",
-  "button_text": "OpenBot",
+  "title": "تخفیف ویژه اکولایسنس فعال شد 🎁",
+  "message": "برای تمدید یا خرید اشتراک جدید می‌تونید از کد تخفیف زیر داخل ربات تلگرام استفاده کنید:",
+  "promo_code": "newapp",
+  "button_text": "ورود به ربات",
   "action_url": "https://t.me/echopress_bot",
   "bot_username": "echopress_bot"
 }
