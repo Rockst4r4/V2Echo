@@ -283,12 +283,20 @@ class EcholicenseApi:
 
         self._state = self._load_saved_state()
         self._state["connectionState"] = "DISCONNECTED"
+        self._state["realPingMs"] = -1
+        self._state["realPingStatus"] = "idle"
+        self._state["realPingHistory"] = []
         self._state["statusMessage"] = "Ready to connect"
         self._state["version"] = APP_VERSION
         self._state["hwid"] = get_hwid()
 
         atexit.register(self._cleanup_on_exit)
+        self._ping_trigger = threading.Event()
+        self._state["realPingMs"] = -1
+        self._state["realPingStatus"] = "idle"
+        self._state["realPingHistory"] = []
         threading.Thread(target=self._background_loops, daemon=True).start()
+        threading.Thread(target=self._real_ping_loop, daemon=True).start()
 
     def _default_state(self) -> dict:
         return {
@@ -964,6 +972,78 @@ class EcholicenseApi:
         except Exception as exc:
             return f"Failed to read logs: {exc}"
         return "No logs yet."
+
+    def _measure_real_ping_once(self):
+        if self._state.get("connectionState") != "CONNECTED":
+            self._state["realPingMs"] = -1
+            self._state["realPingStatus"] = "idle"
+            return
+
+        self._state["realPingStatus"] = "testing"
+        proxies = None
+        if not getattr(self, "_native_wg_active", False):
+            proxy_url = f"http://127.0.0.1:{self._active_port}"
+            proxies = {"http": proxy_url, "https": proxy_url}
+
+        test_urls = (
+            "http://www.gstatic.com/generate_204",
+            "http://cp.cloudflare.com/generate_204",
+        )
+        measured = -1
+        for url in test_urls:
+            try:
+                t0 = time.perf_counter()
+                r = requests.get(
+                    url,
+                    proxies=proxies,
+                    timeout=3.5,
+                    allow_redirects=False,
+                    headers={"Cache-Control": "no-cache", "Connection": "close"},
+                )
+                if r.status_code in (200, 204, 301, 302):
+                    measured = max(1, int((time.perf_counter() - t0) * 1000))
+                    break
+            except Exception:
+                continue
+
+        if self._state.get("connectionState") != "CONNECTED":
+            self._state["realPingMs"] = -1
+            self._state["realPingStatus"] = "idle"
+            return
+
+        self._state["realPingMs"] = measured
+        self._state["realPingStatus"] = "ok" if measured > 0 else "timeout"
+        hist = list(self._state.get("realPingHistory") or [])
+        hist.append(measured if measured > 0 else 0)
+        self._state["realPingHistory"] = hist[-10:]
+
+    def _real_ping_loop(self):
+        last_check = 0.0
+        was_connected = False
+        while True:
+            is_conn = self._state.get("connectionState") == "CONNECTED"
+            if is_conn:
+                now = time.time()
+                if (not was_connected) or (now - last_check >= 4.0) or self._ping_trigger.is_set():
+                    self._ping_trigger.clear()
+                    if not was_connected:
+                        time.sleep(0.7)
+                    self._measure_real_ping_once()
+                    last_check = time.time()
+                was_connected = True
+            else:
+                if was_connected:
+                    self._state["realPingMs"] = -1
+                    self._state["realPingStatus"] = "idle"
+                    self._state["realPingHistory"] = []
+                was_connected = False
+            self._ping_trigger.wait(timeout=0.5)
+
+    def test_real_ping(self) -> dict:
+        if self._state.get("connectionState") == "CONNECTED":
+            self._state["realPingStatus"] = "testing"
+            self._ping_trigger.set()
+        return self.get_state()
 
     def open_url(self, url: str):
         webbrowser.open(url)
