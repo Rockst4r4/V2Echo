@@ -5,7 +5,9 @@ import json
 import os
 import platform
 import re
+import ctypes
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -36,7 +38,7 @@ except ImportError:
     winreg = None
 
 APP_NAME = "EcholicenseVPN"
-APP_VERSION = "1.5"
+APP_VERSION = "1.6"
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -284,6 +286,9 @@ class EcholicenseApi:
         self._native_wg_active = False
         self._log_fh = None
         self._active_port = SOCKS_PORT
+        self._phys_if_index = None
+        self._phys_ip = None
+        self._capture_physical_interface()
         self._connected_at = 0.0
         self._last_net = psutil.net_io_counters()
         self._last_net_ts = time.time()
@@ -495,6 +500,27 @@ class EcholicenseApi:
         if wg_exe.exists() and self._native_wg_active:
             self._run_hidden([str(wg_exe), "/uninstalltunnelservice", WG_TUNNEL_NAME])
         self._native_wg_active = False
+
+    def _capture_physical_interface(self):
+        if os.name != "nt":
+            return
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.connect(("1.1.1.1", 80))
+                local_ip = sock.getsockname()[0]
+            finally:
+                sock.close()
+            if not local_ip or local_ip.startswith(("127.", "172.19.0.")):
+                return
+            dest_ip = struct.unpack("<I", socket.inet_aton("1.1.1.1"))[0]
+            if_idx = ctypes.c_uint32(0)
+            res = ctypes.windll.iphlpapi.GetBestInterface(ctypes.c_uint32(dest_ip), ctypes.byref(if_idx))
+            if res == 0 and if_idx.value > 0:
+                self._phys_if_index = int(if_idx.value)
+                self._phys_ip = local_ip
+        except Exception:
+            pass
 
     def _detect_auto_mtu(self, proto: str) -> int:
         overhead = 80 if proto.upper() == "WIREGUARD" else 60
@@ -749,6 +775,8 @@ class EcholicenseApi:
             return self.get_state()
 
         self.disconnect(keep_killswitch=True)
+        time.sleep(0.15)
+        self._capture_physical_interface()
         self._state["connectionState"] = "CONNECTING"
         self._state["statusMessage"] = "Optimizing DNS & MTU..."
 
@@ -951,6 +979,39 @@ class EcholicenseApi:
         return self.connect() if was_conn else self.get_state()
 
     def ping_all(self) -> dict:
+        if self._state.get("connectionState") != "CONNECTED":
+            self._capture_physical_interface()
+
+        use_phys_bind = (
+            os.name == "nt"
+            and self._state.get("connectionState") == "CONNECTED"
+            and self._state.get("mode") == "tun"
+            and not getattr(self, "_native_wg_active", False)
+            and bool(self._phys_if_index)
+            and bool(self._phys_ip)
+        )
+
+        def _tcp_connect_ms(ip: str, port: int, family: int, bind_phys: bool) -> int:
+            sock = None
+            try:
+                sock = socket.socket(family, socket.SOCK_STREAM)
+                sock.settimeout(1.8)
+                if bind_phys and family == socket.AF_INET:
+                    # IP_UNICAST_IF (31) در ویندوز با ترتیب بایت شبکه باعث دور زدن کامل EcholicenseTUN می‌شود
+                    sock.setsockopt(socket.IPPROTO_IP, 31, struct.pack("!I", self._phys_if_index))
+                    sock.bind((self._phys_ip, 0))
+                t0 = time.perf_counter()
+                sock.connect((ip, port))
+                return max(1, int((time.perf_counter() - t0) * 1000))
+            except Exception:
+                return -1
+            finally:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+
         def _ping_one(srv: dict) -> dict:
             item = dict(srv)
             host = (item.get("host") or "").strip()
@@ -958,33 +1019,21 @@ class EcholicenseApi:
             if not host:
                 item["pingMs"] = -1
                 return item
+
+            family = socket.AF_INET
             try:
                 infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
-                target_addr = infos[0][4]
+                target_ip = infos[0][4][0]
             except Exception:
                 try:
                     infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
-                    target_addr = infos[0][4]
+                    family = infos[0][0]
+                    target_ip = infos[0][4][0]
                 except Exception:
                     item["pingMs"] = -1
                     return item
 
-            sock = None
-            try:
-                sock = socket.socket(infos[0][0], socket.SOCK_STREAM)
-                sock.settimeout(1.5)
-                t0 = time.perf_counter()
-                sock.connect(target_addr)
-                ms = int((time.perf_counter() - t0) * 1000)
-                item["pingMs"] = max(1, ms)
-            except Exception:
-                item["pingMs"] = -1
-            finally:
-                if sock:
-                    try:
-                        sock.close()
-                    except Exception:
-                        pass
+            item["pingMs"] = _tcp_connect_ms(target_ip, port, family, use_phys_bind)
             return item
 
         with ThreadPoolExecutor(max_workers=12) as ex:
@@ -1235,7 +1284,7 @@ def main():
     api = EcholicenseApi()
     index_html = str(get_resource_dir() / "ui" / "index.html")
     win = webview.create_window(
-        title="Echolicense VPN v1.5",
+        title="Echolicense VPN v1.6",
         url=index_html,
         js_api=api,
         width=445,
