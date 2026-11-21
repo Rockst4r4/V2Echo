@@ -6,17 +6,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class VpnUiState(
-    val language: AppLanguage = AppLanguage.FA,
+    val language: AppLanguage = AppLanguage.EN,
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val activeServer: ServerProfile? = null,
     val servers: List<ServerProfile> = emptyList(),
+    val isPinging: Boolean = false,
     val subscriptions: List<SubscriptionItem> = emptyList(),
     val activeSubscriptionId: String? = null,
     val currentSubUrl: String = "",
+    val lastSubUpdatedAt: Long = 0L,
     val subscriptionInfo: SubscriptionInfo = SubscriptionInfo(),
     val activeDns: DnsProvider? = null,
     val manualDns: String = "",
     val iranSplitEnabled: Boolean = true,
+    val adBlockerEnabled: Boolean = true,
     val aiProOnly: Boolean = false,
     val autoMtuEnabled: Boolean = true,
     val mtu: Int = 1360,
@@ -26,7 +29,7 @@ data class VpnUiState(
     val downloadSpeedKbps: Long = 0L,
     val uploadSpeedKbps: Long = 0L,
     val connectedSeconds: Long = 0L,
-    val statusMessage: String = "آماده اتصال"
+    val statusMessage: String = "Ready to connect"
 )
 
 object VpnStateManager {

@@ -166,53 +166,95 @@ fun MainScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // 5. انتخاب سرور
-            LiquidGlassCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .bounceClick { showServerSheet = true }
+            // 5. انتخاب سرور + دکمه مستقیم تست پینگ همه کانفیگ‌ها
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
+                LiquidGlassCard(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .weight(1f)
+                        .bounceClick { showServerSheet = true }
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (uiState.aiProOnly) Icons.Rounded.AutoAwesome else Icons.Rounded.Public,
-                                contentDescription = null,
-                                tint = if (uiState.aiProOnly) AiProAccent else CyanLiquid
-                            )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (uiState.aiProOnly) Icons.Rounded.AutoAwesome else Icons.Rounded.Public,
+                                    contentDescription = null,
+                                    tint = if (uiState.aiProOnly) AiProAccent else CyanLiquid
+                                )
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = uiState.activeServer?.name ?: s.noServerSelected,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                val proto = uiState.activeServer?.protocol?.name ?: s.addSubHint
+                                val pingTxt = uiState.activeServer?.pingMs?.takeIf { it > 0 }?.let { " • ${it}ms" } ?: ""
+                                Text(
+                                    text = "$proto$pingTxt",
+                                    color = Color.White.copy(alpha = 0.65f),
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = uiState.activeServer?.name ?: s.noServerSelected,
-                                color = Color.White,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            val proto = uiState.activeServer?.protocol?.name ?: s.addSubHint
-                            val pingTxt = uiState.activeServer?.pingMs?.takeIf { it > 0 }?.let { " • ${it}ms" } ?: ""
-                            Text(
-                                text = "$proto • Full TUN$pingTxt",
-                                color = Color.White.copy(alpha = 0.65f),
-                                fontSize = 12.sp
-                            )
-                        }
+                        Icon(Icons.Rounded.ChevronLeft, null, tint = Color.White.copy(alpha = 0.7f))
                     }
-                    Icon(Icons.Rounded.ChevronLeft, null, tint = Color.White.copy(alpha = 0.7f))
+                }
+
+                LiquidGlassCard(
+                    cornerRadius = 22.dp,
+                    highlightColor = if (uiState.isPinging) EmeraldGlow else CyanLiquid.copy(alpha = 0.65f),
+                    modifier = Modifier.bounceClick { if (!uiState.isPinging) onSmartPingClick() }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        if (uiState.isPinging) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = EmeraldGlow,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Rounded.Speed,
+                                contentDescription = s.pingAllBtn,
+                                tint = EmeraldGlow,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = if (uiState.isPinging) s.pingingNow else s.pingAllBtn,
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
 
@@ -796,6 +838,11 @@ private fun TrafficQuotaCard(
                     color = if (days <= 2) AmberWarn else Color.White.copy(alpha = 0.7f),
                     fontSize = 11.sp
                 )
+            }
+
+            if (uiState.currentSubUrl.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text("🔄 ${s.autoUpdate12h}", color = Color.White.copy(alpha = 0.48f), fontSize = 10.sp)
             }
 
             if (sub.isLowTraffic) {

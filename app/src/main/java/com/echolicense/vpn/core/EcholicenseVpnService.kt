@@ -3,16 +3,23 @@ package com.echolicense.vpn.core
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Intent
 import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.service.quicksettings.TileService
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.echolicense.vpn.MainActivity
+import com.echolicense.vpn.R
 import com.echolicense.vpn.data.AppLanguage
 import com.echolicense.vpn.data.ConnectionState
+import com.echolicense.vpn.data.DnsProvider
 import com.echolicense.vpn.data.IranSplitTunnel
+import com.echolicense.vpn.tile.EcholicenseTileService
 import kotlinx.coroutines.*
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
@@ -89,7 +96,11 @@ class EcholicenseVpnService : VpnService() {
         connectJob = scope.launch {
             try {
                 val hasGeoFiles = ensureGeoAssetsCopied()
-                val resolvedDns = SmartDnsManager.resolveDns(current.manualDns)
+                val resolvedDns = if (current.manualDns.isBlank() && current.adBlockerEnabled) {
+                    DnsProvider("AdGuard AdBlock", "94.140.14.14", "https://dns.adguard-dns.com/dns-query", 0)
+                } else {
+                    SmartDnsManager.resolveDns(current.manualDns)
+                }
                 val finalMtu = if (current.autoMtuEnabled) {
                     AutoMtuManager.detectOptimalMtu(server.protocol)
                 } else {
@@ -112,6 +123,7 @@ class EcholicenseVpnService : VpnService() {
                     profile = server,
                     primaryDns = resolvedDns,
                     enableIranSplit = current.iranSplitEnabled,
+                    enableAdBlocker = current.adBlockerEnabled,
                     mtu = finalMtu,
                     muxConfig = current.muxConfig,
                     hasGeoFiles = hasGeoFiles
@@ -124,6 +136,12 @@ class EcholicenseVpnService : VpnService() {
                 )
 
                 VpnStateManager.setConnected()
+                runCatching {
+                    TileService.requestListeningState(
+                        this@EcholicenseVpnService,
+                        ComponentName(this@EcholicenseVpnService, EcholicenseTileService::class.java)
+                    )
+                }
                 val muxLabel = if (current.muxConfig.enabled) " • Mux" else ""
                 updateNotification("${server.name} • MTU: $finalMtu$muxLabel")
                 startTelemetryLoop()
@@ -223,6 +241,12 @@ class EcholicenseVpnService : VpnService() {
         tunInterface = null
         if (stopSelfNow) {
             VpnStateManager.setDisconnected()
+            runCatching {
+                TileService.requestListeningState(
+                    this,
+                    ComponentName(this, EcholicenseTileService::class.java)
+                )
+            }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -239,13 +263,36 @@ class EcholicenseVpnService : VpnService() {
         }
     }
 
-    private fun buildNotification(text: String): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun buildNotification(text: String): Notification {
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openPendingIntent = PendingIntent.getActivity(
+            this,
+            NOTIF_ID,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val disconnectIntent = Intent(this, EcholicenseVpnService::class.java).apply {
+            action = ACTION_DISCONNECT
+        }
+        val disconnectPendingIntent = PendingIntent.getService(
+            this,
+            NOTIF_ID + 1,
+            disconnectIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Echolicense VPN")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.ic_qs_tile)
+            .setContentIntent(openPendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", disconnectPendingIntent)
             .setOngoing(true)
             .build()
+    }
 
     private fun updateNotification(text: String) {
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text))

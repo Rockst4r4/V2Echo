@@ -23,6 +23,7 @@ import com.echolicense.vpn.core.VpnStateManager
 import com.echolicense.vpn.data.*
 import com.echolicense.vpn.ui.MainScreen
 import com.echolicense.vpn.worker.AnnouncementWorker
+import com.echolicense.vpn.worker.SubscriptionAutoUpdateWorker
 import com.echolicense.vpn.worker.TrafficAlertWorker
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -105,8 +106,11 @@ class MainActivity : ComponentActivity() {
         AnnouncementWorker.schedule(this)
         lifecycleScope.launch { AnnouncementWorker.fetchAndProcess(this@MainActivity) }
 
-        if (activeSub != null && VpnStateManager.state.value.servers.isEmpty()) {
-            loadSubscriptionUrl(activeSub.url)
+        if (activeSub != null) {
+            SubscriptionAutoUpdateWorker.schedule(this, replace = false)
+            if (VpnStateManager.state.value.servers.isEmpty()) {
+                loadSubscriptionUrl(activeSub.url)
+            }
         }
 
         setContent {
@@ -272,6 +276,7 @@ class MainActivity : ComponentActivity() {
 
         if (nextActive == null) {
             TrafficAlertWorker.cancel(this)
+            SubscriptionAutoUpdateWorker.cancel(this)
             VpnStateManager.update {
                 it.copy(
                     subscriptions = updated,
@@ -312,6 +317,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 TrafficAlertWorker.schedule(this@MainActivity, url)
+                SubscriptionAutoUpdateWorker.schedule(this@MainActivity, replace = true)
                 TrafficAlertWorker.evaluateAndNotify(this@MainActivity, subInfo)
             } catch (e: Exception) {
                 VpnStateManager.update {
@@ -375,12 +381,43 @@ class MainActivity : ComponentActivity() {
 
     private fun runSmartPing() {
         lifecycleScope.launch {
-            val current = VpnStateManager.state.value.servers
-            if (current.isEmpty()) return@launch
+            val currentState = VpnStateManager.state.value
+            val current = currentState.servers
+            val isEn = currentState.language == AppLanguage.EN
+            if (current.isEmpty()) {
+                VpnStateManager.update {
+                    it.copy(statusMessage = if (isEn) "No configs to test" else "کانفیگی برای تست وجود ندارد")
+                }
+                return@launch
+            }
+            VpnStateManager.update {
+                it.copy(
+                    isPinging = true,
+                    statusMessage = if (isEn) "Testing ping of all ${current.size} configs..." else "در حال تست پینگ ${current.size} کانفیگ..."
+                )
+            }
             val sorted = repo.pingAllServers(current)
+            val fastest = sorted.firstOrNull { it.pingMs > 0 }
             VpnStateManager.update { state ->
-                val preferred = if (state.aiProOnly) sorted.firstOrNull { it.isAiPro() } else sorted.firstOrNull()
-                state.copy(servers = sorted, activeServer = preferred)
+                val activeNow = state.activeServer
+                val nextActive = if (state.connectionState == ConnectionState.CONNECTED && activeNow != null) {
+                    sorted.firstOrNull { it.id == activeNow.id } ?: activeNow
+                } else if (state.aiProOnly) {
+                    sorted.firstOrNull { it.isAiPro() } ?: sorted.firstOrNull()
+                } else {
+                    sorted.firstOrNull()
+                }
+                val doneMsg = if (fastest != null) {
+                    if (isEn) "Ping done • Fastest: ${fastest.pingMs}ms" else "پینگ انجام شد • سریع‌ترین: ${fastest.pingMs}ms"
+                } else {
+                    if (isEn) "Ping finished (check internet)" else "تست پینگ انجام شد (اینترنت را چک کنید)"
+                }
+                state.copy(
+                    isPinging = false,
+                    servers = sorted,
+                    activeServer = nextActive,
+                    statusMessage = doneMsg
+                )
             }
         }
     }
