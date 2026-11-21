@@ -38,7 +38,7 @@ except ImportError:
     winreg = None
 
 APP_NAME = "EcholicenseVPN"
-APP_VERSION = "1.7"
+APP_VERSION = "1.8"
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -1297,7 +1297,7 @@ def main():
     api = EcholicenseApi()
     index_html = str(get_resource_dir() / "ui" / "index.html")
     win = webview.create_window(
-        title="Echolicense VPN v1.7",
+        title="Echolicense VPN v1.8",
         url=index_html,
         js_api=api,
         width=445,

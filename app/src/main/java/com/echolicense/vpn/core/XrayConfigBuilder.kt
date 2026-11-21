@@ -24,7 +24,28 @@ object XrayConfigBuilder {
         hasGeoFiles: Boolean
     ): String {
         val root = JSONObject()
-        root.put("log", JSONObject().put("loglevel", "warning"))
+        root.put("log", JSONObject().put("loglevel", "none"))
+        root.put(
+            "policy",
+            JSONObject()
+                .put(
+                    "levels",
+                    JSONObject().put(
+                        "8",
+                        JSONObject()
+                            .put("connIdle", 300)
+                            .put("downlinkOnly", 1)
+                            .put("handshake", 4)
+                            .put("uplinkOnly", 1)
+                    )
+                )
+                .put(
+                    "system",
+                    JSONObject()
+                        .put("statsOutboundUplink", false)
+                        .put("statsOutboundDownlink", false)
+                )
+        )
 
         val dnsServers = JSONArray()
         if (profile.host.isNotBlank() && !IPV4_REGEX.matches(profile.host) && !profile.host.contains(":")) {
@@ -45,10 +66,13 @@ object XrayConfigBuilder {
         }
 
         val addedDns = linkedSetOf<String>()
-        if (primaryDns.dohUrl.isNotBlank()) addedDns.add(primaryDns.dohUrl)
-        if (primaryDns.ipv4.isNotBlank()) addedDns.add(primaryDns.ipv4)
+        if (SmartDnsManager.isValidIpv4(primaryDns.ipv4)) {
+            addedDns.add(primaryDns.ipv4)
+        } else if (primaryDns.dohUrl.isNotBlank()) {
+            addedDns.add(primaryDns.dohUrl)
+        }
+        addedDns.add("1.1.1.1")
         addedDns.add("8.8.8.8")
-        addedDns.add("localhost")
         addedDns.forEach { dnsServers.put(it) }
 
         root.put(
@@ -117,6 +141,25 @@ object XrayConfigBuilder {
                 .put("outboundTag", "dns-out")
         )
 
+        if (enableIranSplit && SmartDnsManager.isValidIpv4(SmartDnsManager.IRAN_DIRECT_DNS)) {
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("ip", JSONArray().put("${SmartDnsManager.IRAN_DIRECT_DNS}/32"))
+                    .put("outboundTag", "direct")
+            )
+        }
+
+        if (profile.protocol != VpnProtocol.WIREGUARD) {
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("network", "udp")
+                    .put("port", 443)
+                    .put("outboundTag", "block")
+            )
+        }
+
         val privateIps = if (hasGeoFiles) {
             JSONArray().put("geoip:private")
         } else {
@@ -179,7 +222,7 @@ object XrayConfigBuilder {
         root.put(
             "routing",
             JSONObject()
-                .put("domainStrategy", "IPIfNonMatch")
+                .put("domainStrategy", "AsIs")
                 .put("rules", rules)
         )
 

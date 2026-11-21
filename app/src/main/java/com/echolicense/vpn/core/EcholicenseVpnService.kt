@@ -19,6 +19,7 @@ import com.echolicense.vpn.data.AppLanguage
 import com.echolicense.vpn.data.ConnectionState
 import com.echolicense.vpn.data.DnsProvider
 import com.echolicense.vpn.data.IranSplitTunnel
+import com.echolicense.vpn.data.VpnProtocol
 import com.echolicense.vpn.tile.EcholicenseTileService
 import com.echolicense.vpn.worker.AnnouncementWorker
 import kotlinx.coroutines.*
@@ -43,6 +44,7 @@ class EcholicenseVpnService : VpnService() {
     private var coreController: CoreController? = null
     private var telemetryJob: Job? = null
     private var connectJob: Job? = null
+    private var notifJob: Job? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -97,13 +99,13 @@ class EcholicenseVpnService : VpnService() {
         connectJob = scope.launch {
             try {
                 val hasGeoFiles = ensureGeoAssetsCopied()
-                val resolvedDns = if (current.manualDns.isBlank() && current.adBlockerEnabled) {
-                    DnsProvider("AdGuard AdBlock", "94.140.14.14", "https://dns.adguard-dns.com/dns-query", 0)
-                } else {
-                    SmartDnsManager.resolveDns(current.manualDns)
-                }
+                val resolvedDns = SmartDnsManager.resolveDns(current.manualDns)
                 val finalMtu = if (current.autoMtuEnabled) {
-                    AutoMtuManager.detectOptimalMtu(server.protocol)
+                    if (server.protocol == VpnProtocol.WIREGUARD) {
+                        AutoMtuManager.detectOptimalMtu(server.protocol)
+                    } else {
+                        1500
+                    }
                 } else {
                     current.mtu.coerceIn(1200, 1500)
                 }
@@ -137,7 +139,8 @@ class EcholicenseVpnService : VpnService() {
                 )
 
                 VpnStateManager.setConnected()
-                scope.launch { delay(1500); while (isActive) { runCatching { AnnouncementWorker.fetchAndProcess(this@EcholicenseVpnService) }; delay(30_000) } }
+                notifJob?.cancel()
+                notifJob = scope.launch { delay(1500); while (isActive) { runCatching { AnnouncementWorker.fetchAndProcess(this@EcholicenseVpnService) }; delay(30_000) } }
                 runCatching {
                     TileService.requestListeningState(
                         this@EcholicenseVpnService,
@@ -235,6 +238,7 @@ class EcholicenseVpnService : VpnService() {
     }
 
     private fun stopVpn(stopSelfNow: Boolean) {
+        notifJob?.cancel()
         connectJob?.cancel()
         telemetryJob?.cancel()
         runCatching { coreController?.stopLoop() }

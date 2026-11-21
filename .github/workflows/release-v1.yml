@@ -1,4 +1,4 @@
-name: Echolicense v1.7 Official Release (Android + PC)
+name: Echolicense v1.8 Official Release (Android + PC)
 
 on:
   push:
@@ -108,16 +108,16 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           gradle assembleRelease bundleRelease
-          cp app/build/outputs/apk/release/app-release.apk Echolicense-Android-v1.7.apk
-          cp app/build/outputs/bundle/release/app-release.aab Echolicense-Android-v1.7.aab
+          cp app/build/outputs/apk/release/app-release.apk Echolicense-Android-v1.8.apk
+          cp app/build/outputs/bundle/release/app-release.aab Echolicense-Android-v1.8.aab
 
       - name: Upload Android Release Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Echolicense-Android-v1.7
+          name: Echolicense-Android-v1.8
           path: |
-            Echolicense-Android-v1.7.apk
-            Echolicense-Android-v1.7.aab
+            Echolicense-Android-v1.8.apk
+            Echolicense-Android-v1.8.aab
 
   build-windows-pc:
     runs-on: windows-latest
@@ -170,13 +170,13 @@ jobs:
           foreach ($opt in @("wireguard.exe", "tunnel.dll", "wireguard.dll", "geoip-ir.srs", "geosite-ir.srs")) {
             if (Test-Path $opt) { Copy-Item $opt -Destination "release_pkg\" }
           }
-          Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v1.7.zip" -Force
+          Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v1.8.zip" -Force
 
       - name: Upload Windows PC Release Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Echolicense-Windows-v1.7
-          path: Echolicense-Windows-v1.7.zip
+          name: Echolicense-Windows-v1.8
+          path: Echolicense-Windows-v1.8.zip
 
   publish-release:
     needs: [build-android, build-windows-pc]
@@ -189,13 +189,13 @@ jobs:
       - name: Publish Official GitHub Release v1.0.0
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.7
-          name: "Echolicense VPN v1.7 (Android + Windows PC)"
+          tag_name: v1.8
+          name: "Echolicense VPN v1.8 (Android + Windows PC)"
           body: |
-            ## Echolicense VPN v1.7 Official Release
-            - **Android**: Signed Release APK (`Echolicense-Android-v1.7.apk`) & Google Play AAB (`Echolicense-Android-v1.7.aab`)
-            - **Windows PC**: Portable Release (`Echolicense-Windows-v1.7.zip`) with System Proxy, Real-Ping TUN Mode, KillSwitch, Startup App, Auto-Connect & Graphical Split Tunneling
+            ## Echolicense VPN v1.8 Official Release
+            - **Android**: Signed Release APK (`Echolicense-Android-v1.8.apk`) & Google Play AAB (`Echolicense-Android-v1.8.aab`)
+            - **Windows PC**: Portable Release (`Echolicense-Windows-v1.8.zip`) with System Proxy, Real-Ping TUN Mode, KillSwitch, Startup App, Auto-Connect & Graphical Split Tunneling
             - **New**: Custom Echolicense Brand Logo & Minimal Red Gaming Mode (WireGuard)
           files: |
-            release-files/Echolicense-Android-v1.7/*
-            release-files/Echolicense-Windows-v1.7/*
+            release-files/Echolicense-Android-v1.8/*
+            release-files/Echolicense-Windows-v1.8/*
