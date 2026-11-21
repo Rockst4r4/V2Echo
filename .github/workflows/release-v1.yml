@@ -3,6 +3,10 @@ name: Echolicense v1.0.0 Official Release (Android + PC)
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "announcements.json"
+      - "send_notif.sh"
+      - "README.md"
   workflow_dispatch:
 
 permissions:

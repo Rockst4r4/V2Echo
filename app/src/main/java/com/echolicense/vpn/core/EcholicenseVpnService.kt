@@ -20,6 +20,7 @@ import com.echolicense.vpn.data.ConnectionState
 import com.echolicense.vpn.data.DnsProvider
 import com.echolicense.vpn.data.IranSplitTunnel
 import com.echolicense.vpn.tile.EcholicenseTileService
+import com.echolicense.vpn.worker.AnnouncementWorker
 import kotlinx.coroutines.*
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
@@ -136,6 +137,7 @@ class EcholicenseVpnService : VpnService() {
                 )
 
                 VpnStateManager.setConnected()
+                scope.launch { delay(1800); runCatching { AnnouncementWorker.fetchAndProcess(this@EcholicenseVpnService) } }
                 runCatching {
                     TileService.requestListeningState(
                         this@EcholicenseVpnService,

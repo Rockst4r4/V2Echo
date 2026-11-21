@@ -28,7 +28,7 @@ except ImportError:
     winreg = None
 
 APP_NAME = "EcholicenseVPN"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.3"
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -325,6 +325,7 @@ class EcholicenseApi:
             "splitApps": [],
             "announcement": None,
             "dismissedAnnouncementId": 0,
+            "lastNotifiedId": 0,
             "botUsername": "echopress_bot",
         }
 
@@ -343,7 +344,7 @@ class EcholicenseApi:
             "language", "mode", "subscriptions", "activeSubId", "servers", "activeServerId",
             "subInfo", "aiProOnly", "gamingOnly", "killSwitch", "startupApp", "autoConnect",
             "iranSplit", "adBlocker", "autoMtu", "mtu", "manualDns", "mux",
-            "splitMode", "splitApps", "dismissedAnnouncementId", "botUsername",
+            "splitMode", "splitApps", "dismissedAnnouncementId", "lastNotifiedId", "botUsername",
         ]
         payload = {k: self._state.get(k) for k in persist_keys}
         try:
@@ -552,28 +553,115 @@ class EcholicenseApi:
         self._fetch_announcement()
         if self._state.get("autoConnect") and self._state.get("activeServerId"):
             self.toggle_connect()
-        last_sync = time.time()
+        last_sub_sync = time.time()
+        last_notif_sync = time.time()
         while True:
-            time.sleep(60)
-            if time.time() - last_sync >= 12 * 3600:
-                last_sync = time.time()
+            time.sleep(30)
+            now = time.time()
+            if now - last_notif_sync >= 300:
+                last_notif_sync = now
+                self._fetch_announcement()
+            if now - last_sub_sync >= 12 * 3600:
+                last_sub_sync = now
                 active_sub = self._get_active_sub()
                 if active_sub:
-                    self._sync_sub_url(active_sub["url"])
-                self._fetch_announcement()
+                    try:
+                        self._sync_sub_url(active_sub["url"])
+                    except Exception:
+                        pass
+
+    def _delayed_fetch_announcement(self):
+        time.sleep(2.0)
+        self._fetch_announcement()
+
+    def _show_windows_toast(self, title: str, message: str):
+        if os.name != "nt":
+            return
+        def _worker():
+            ps = (
+                "Add-Type -AssemblyName System.Windows.Forms;"
+                "Add-Type -AssemblyName System.Drawing;"
+                "$n = New-Object System.Windows.Forms.NotifyIcon;"
+                "$n.Icon = [System.Drawing.SystemIcons]::Information;"
+                "$n.Visible = $true;"
+                "$n.BalloonTipTitle = $env:ECHO_NOTIF_TITLE;"
+                "$n.BalloonTipText = $env:ECHO_NOTIF_MSG;"
+                "$n.ShowBalloonTip(8000);"
+                "Start-Sleep -Seconds 9;"
+                "$n.Dispose();"
+            )
+            env = dict(os.environ)
+            env["ECHO_NOTIF_TITLE"] = (title or "Echolicense VPN")[:63]
+            env["ECHO_NOTIF_MSG"] = (message or "New notification")[:250]
+            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            try:
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+                    env=env,
+                    capture_output=True,
+                    creationflags=flags,
+                    timeout=14,
+                )
+            except Exception:
+                pass
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _fetch_announcement(self):
-        try:
-            r = requests.get(f"{ANNOUNCEMENT_URL}?t={int(time.time() // 60)}", timeout=8)
-            if r.status_code == 200:
-                data = r.json()
-                self._state["botUsername"] = data.get("bot_username") or "echopress_bot"
-                if data.get("active") and data.get("id") != self._state.get("dismissedAnnouncementId"):
-                    self._state["announcement"] = data
-                else:
-                    self._state["announcement"] = None
-        except Exception:
-            pass
+        endpoints = (
+            ANNOUNCEMENT_URL,
+            "https://cdn.jsdelivr.net/gh/Rockst4r4/V2Echo@main/announcements.json",
+        )
+        proxies = None
+        if self._state.get("connectionState") == "CONNECTED" and not getattr(self, "_native_wg_active", False):
+            proxy_url = f"http://127.0.0.1:{self._active_port}"
+            proxies = {"http": proxy_url, "https": proxy_url}
+
+        data = None
+        ts = int(time.time() // 30)
+        for url in endpoints:
+            try:
+                r = requests.get(
+                    f"{url}?t={ts}",
+                    proxies=proxies,
+                    timeout=7,
+                    headers={"Cache-Control": "no-cache"},
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    break
+            except Exception:
+                continue
+
+        if not isinstance(data, dict):
+            return
+
+        self._state["botUsername"] = data.get("bot_username") or "echopress_bot"
+        target = str(data.get("target") or "all").lower()
+        if target not in ("all", "pc"):
+            self._state["announcement"] = None
+            return
+
+        aid = int(data.get("id") or 0)
+        active = bool(data.get("active"))
+        show_banner = data.get("show_banner", True) is not False
+        push_enabled = data.get("push_notification", True) is not False
+
+        if active and show_banner and aid > 0 and aid != int(self._state.get("dismissedAnnouncementId") or 0):
+            self._state["announcement"] = data
+        else:
+            self._state["announcement"] = None
+
+        last_notified = int(self._state.get("lastNotifiedId") or 0)
+        title = str(data.get("title") or "").strip()
+        msg = str(data.get("message") or "").strip()
+        promo = str(data.get("promo_code") or "").strip()
+        if promo:
+            msg = f"{msg} | Code: {promo}" if msg else f"Promo Code: {promo}"
+
+        if active and push_enabled and aid > last_notified and title:
+            self._state["lastNotifiedId"] = aid
+            self._save_state()
+            self._show_windows_toast(title, msg)
 
     def _get_active_sub(self):
         sid = self._state.get("activeSubId")
@@ -675,6 +763,7 @@ class EcholicenseApi:
                 self._connected_at = time.time()
                 self._state["connectionState"] = "CONNECTED"
                 self._state["statusMessage"] = f"Connected • WireGuard Kernel TUN (Real Ping) • MTU {mtu}"
+                threading.Thread(target=self._delayed_fetch_announcement, daemon=True).start()
                 self._save_state()
                 return self.get_state()
 
@@ -751,6 +840,7 @@ class EcholicenseApi:
         self._state["connectionState"] = "CONNECTED"
         mode_lbl = "TUN (Real Ping)" if mode == "tun" else "System Proxy"
         self._state["statusMessage"] = f"Connected • {mode_lbl} • MTU {mtu}"
+        threading.Thread(target=self._delayed_fetch_announcement, daemon=True).start()
         self._save_state()
         return self.get_state()
 
@@ -1053,7 +1143,7 @@ def main():
     api = EcholicenseApi()
     index_html = str(get_resource_dir() / "ui" / "index.html")
     win = webview.create_window(
-        title="Echolicense VPN v1.0.0",
+        title="Echolicense VPN v1.3",
         url=index_html,
         js_api=api,
         width=460,
