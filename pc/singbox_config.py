@@ -316,6 +316,7 @@ def build_singbox_config(
     route_rules = [
         {"protocol": "dns", "outbound": "dns-out"},
         {"ip_is_private": True, "outbound": "direct"},
+        {"process_name": ["EcholicenseVPN.exe", "python.exe", "pythonw.exe"], "outbound": "direct"},
     ]
 
     if adblock:

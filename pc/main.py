@@ -294,20 +294,12 @@ class EcholicenseApi:
 
         self._state = self._load_saved_state()
         self._state["connectionState"] = "DISCONNECTED"
-        self._state["realPingMs"] = -1
-        self._state["realPingStatus"] = "idle"
-        self._state["realPingHistory"] = []
         self._state["statusMessage"] = "Ready to connect"
         self._state["version"] = APP_VERSION
         self._state["hwid"] = get_hwid()
 
         atexit.register(self._cleanup_on_exit)
-        self._ping_trigger = threading.Event()
-        self._state["realPingMs"] = -1
-        self._state["realPingStatus"] = "idle"
-        self._state["realPingHistory"] = []
         threading.Thread(target=self._background_loops, daemon=True).start()
-        threading.Thread(target=self._real_ping_loop, daemon=True).start()
 
     def _default_state(self) -> dict:
         return {
@@ -960,22 +952,50 @@ class EcholicenseApi:
 
     def ping_all(self) -> dict:
         def _ping_one(srv: dict) -> dict:
-            t0 = time.time()
+            item = dict(srv)
+            host = (item.get("host") or "").strip()
+            port = int(item.get("port") or 443)
+            if not host:
+                item["pingMs"] = -1
+                return item
             try:
-                with socket.create_connection((srv["host"], int(srv["port"])), timeout=1.4):
-                    srv["pingMs"] = max(1, int((time.time() - t0) * 1000))
+                infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+                target_addr = infos[0][4]
             except Exception:
-                srv["pingMs"] = -1
-            return srv
+                try:
+                    infos = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                    target_addr = infos[0][4]
+                except Exception:
+                    item["pingMs"] = -1
+                    return item
+
+            sock = None
+            try:
+                sock = socket.socket(infos[0][0], socket.SOCK_STREAM)
+                sock.settimeout(1.5)
+                t0 = time.perf_counter()
+                sock.connect(target_addr)
+                ms = int((time.perf_counter() - t0) * 1000)
+                item["pingMs"] = max(1, ms)
+            except Exception:
+                item["pingMs"] = -1
+            finally:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+            return item
 
         with ThreadPoolExecutor(max_workers=12) as ex:
-            results = list(ex.map(_ping_one, self._state["servers"]))
+            results = list(ex.map(_ping_one, list(self._state["servers"])))
         results.sort(key=lambda x: x["pingMs"] if x["pingMs"] > 0 else 999999)
         self._state["servers"] = results
         fastest = next((x["pingMs"] for x in results if x["pingMs"] > 0), None)
         self._state["statusMessage"] = f"Ping done • Fastest: {fastest}ms" if fastest else "Ping completed"
         self._save_state()
         return self.get_state()
+
 
     def set_mode(self, mode: str) -> dict:
         was_conn = self._state["connectionState"] == "CONNECTED"
@@ -1081,77 +1101,7 @@ class EcholicenseApi:
             return f"Failed to read logs: {exc}"
         return "No logs yet."
 
-    def _measure_real_ping_once(self):
-        if self._state.get("connectionState") != "CONNECTED":
-            self._state["realPingMs"] = -1
-            self._state["realPingStatus"] = "idle"
-            return
 
-        self._state["realPingStatus"] = "testing"
-        proxies = None
-        if not getattr(self, "_native_wg_active", False):
-            proxy_url = f"http://127.0.0.1:{self._active_port}"
-            proxies = {"http": proxy_url, "https": proxy_url}
-
-        test_urls = (
-            "http://www.gstatic.com/generate_204",
-            "http://cp.cloudflare.com/generate_204",
-        )
-        measured = -1
-        for url in test_urls:
-            try:
-                t0 = time.perf_counter()
-                r = requests.get(
-                    url,
-                    proxies=proxies,
-                    timeout=3.5,
-                    allow_redirects=False,
-                    headers={"Cache-Control": "no-cache", "Connection": "close"},
-                )
-                if r.status_code in (200, 204, 301, 302):
-                    measured = max(1, int((time.perf_counter() - t0) * 1000))
-                    break
-            except Exception:
-                continue
-
-        if self._state.get("connectionState") != "CONNECTED":
-            self._state["realPingMs"] = -1
-            self._state["realPingStatus"] = "idle"
-            return
-
-        self._state["realPingMs"] = measured
-        self._state["realPingStatus"] = "ok" if measured > 0 else "timeout"
-        hist = list(self._state.get("realPingHistory") or [])
-        hist.append(measured if measured > 0 else 0)
-        self._state["realPingHistory"] = hist[-10:]
-
-    def _real_ping_loop(self):
-        last_check = 0.0
-        was_connected = False
-        while True:
-            is_conn = self._state.get("connectionState") == "CONNECTED"
-            if is_conn:
-                now = time.time()
-                if (not was_connected) or (now - last_check >= 4.0) or self._ping_trigger.is_set():
-                    self._ping_trigger.clear()
-                    if not was_connected:
-                        time.sleep(0.7)
-                    self._measure_real_ping_once()
-                    last_check = time.time()
-                was_connected = True
-            else:
-                if was_connected:
-                    self._state["realPingMs"] = -1
-                    self._state["realPingStatus"] = "idle"
-                    self._state["realPingHistory"] = []
-                was_connected = False
-            self._ping_trigger.wait(timeout=0.5)
-
-    def test_real_ping(self) -> dict:
-        if self._state.get("connectionState") == "CONNECTED":
-            self._state["realPingStatus"] = "testing"
-            self._ping_trigger.set()
-        return self.get_state()
 
 
     def _build_tray_image(self, conn_state: str, gaming: bool):

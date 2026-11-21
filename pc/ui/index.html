@@ -149,12 +149,9 @@ input[type="text"], input[type="number"], textarea {
 .divider { height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0; }
 .setting-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; }
 
-.ping-dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,0.28); display: inline-block; flex-shrink: 0; }
-.ping-dot.good { background: var(--green); box-shadow: 0 0 10px var(--green); }
-.ping-dot.mid { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
-.ping-dot.bad { background: var(--gaming); box-shadow: 0 0 10px var(--gaming); }
-.sparkline { display: flex; align-items: flex-end; gap: 3px; height: 22px; }
-.spark-bar { width: 5px; border-radius: 3px; background: rgba(255,255,255,0.16); transition: height 0.25s ease, background 0.25s ease; }
+
+
+
 
 html {
   border: 1px solid rgba(255, 255, 255, 0.11);
@@ -281,7 +278,7 @@ body.connected .win-dot {
 </div>
 
 <div class="glass seg">
-  <div class="seg-btn click" id="modeTun" onclick="setMode('tun')">TUN Mode (Real Ping)</div>
+  <div class="seg-btn click" id="modeTun" onclick="setMode('tun')">TUN Mode</div>
   <div class="seg-btn click" id="modeProxy" onclick="setMode('proxy')">System Proxy</div>
 </div>
 
@@ -354,21 +351,6 @@ body.connected .win-dot {
   </div>
   <div class="bar-bg"><div class="bar-fill" id="quotaBar" style="width:0%"></div></div>
   <div style="font-size:10px;color:var(--muted);margin-top:6px" id="quotaSub">Auto-sync every 12h</div>
-</div>
-
-<!-- Live Real HTTP/TCP Tunnel Ping -->
-<div class="glass card row click" id="realPingCard" onclick="testRealPing()" style="border-color:rgba(34,228,255,0.38)">
-  <div style="display:flex;align-items:center;gap:10px">
-    <span class="ping-dot" id="realPingDot"></span>
-    <div>
-      <div style="font-size:13px;font-weight:700" id="realPingTitle">📡 Real Tunnel Ping</div>
-      <div style="font-size:10px;color:var(--muted)" id="realPingSub">HTTP/TCP 204 • Connect to measure</div>
-    </div>
-  </div>
-  <div style="display:flex;align-items:center;gap:12px">
-    <div class="sparkline" id="realPingSpark"></div>
-    <div style="font-size:15px;font-weight:800;min-width:62px;text-align:right;color:var(--muted)" id="realPingVal">-- ms</div>
-  </div>
 </div>
 
 <div class="grid2">
@@ -545,48 +527,6 @@ function render(st) {
   }
 
   document.getElementById('downSpeed').textContent = `↓ ${st.downKbps || 0} KB/s`;
-
-  // Real HTTP/TCP Ping live card
-  const rpMs = typeof st.realPingMs === 'number' ? st.realPingMs : -1;
-  const rpSt = st.realPingStatus || 'idle';
-  const rpDot = document.getElementById('realPingDot');
-  const rpVal = document.getElementById('realPingVal');
-  const rpSub = document.getElementById('realPingSub');
-  const rpTitle = document.getElementById('realPingTitle');
-  const rpSpark = document.getElementById('realPingSpark');
-  rpTitle.textContent = st.language === 'fa' ? '📡 پینگ واقعی تونل' : '📡 Real Tunnel Ping';
-
-  rpDot.className = 'ping-dot';
-  if (!isConn) {
-    rpVal.textContent = '-- ms';
-    rpVal.style.color = 'var(--muted)';
-    rpSub.textContent = st.language === 'fa' ? 'پس از اتصال اندازه‌گیری می‌شود' : 'HTTP/TCP 204 • Connect to measure';
-  } else if (rpSt === 'testing' && rpMs <= 0) {
-    rpVal.textContent = '...';
-    rpVal.style.color = 'var(--cyan)';
-    rpSub.textContent = st.language === 'fa' ? 'در حال سنجش پینگ واقعی...' : 'Measuring real tunnel delay...';
-  } else if (rpMs > 0) {
-    rpVal.textContent = `${rpMs} ms`;
-    const cls = rpMs < 180 ? 'good' : (rpMs < 350 ? 'mid' : 'bad');
-    rpDot.classList.add(cls);
-    rpVal.style.color = cls === 'good' ? 'var(--green)' : (cls === 'mid' ? 'var(--amber)' : 'var(--gaming)');
-    rpSub.textContent = st.language === 'fa' ? 'تست زنده HTTP/TCP • لمس برای تست مجدد' : 'Live HTTP/TCP 204 • Tap to re-test';
-  } else {
-    rpDot.classList.add('bad');
-    rpVal.textContent = 'Timeout';
-    rpVal.style.color = 'var(--gaming)';
-    rpSub.textContent = st.language === 'fa' ? 'پاسخی از تونل دریافت نشد • لمس برای تلاش مجدد' : 'No tunnel response • Tap to retry';
-  }
-
-  const hist = (st.realPingHistory || []).slice(-10);
-  const padded = Array(Math.max(0, 10 - hist.length)).fill(null).concat(hist);
-  rpSpark.innerHTML = padded.map(v => {
-    if (v === null) return '<div class="spark-bar" style="height:4px"></div>';
-    if (v === 0) return '<div class="spark-bar" style="height:6px;background:var(--gaming)"></div>';
-    const h = Math.max(5, Math.min(22, Math.round((v / 400) * 22)));
-    const col = v < 180 ? 'var(--green)' : (v < 350 ? 'var(--amber)' : 'var(--gaming)');
-    return `<div class="spark-bar" style="height:${h}px;background:${col}"></div>`;
-  }).join('');
   document.getElementById('upSpeed').textContent = `↑ ${st.upKbps || 0} KB/s`;
   document.getElementById('dnsLabel').textContent = st.manualDns || st.activeDns || 'Auto';
   document.getElementById('mtuLabel').textContent = `MTU: ${st.mtu || 1360} ${st.autoMtu ? '(Auto)' : ''}`;
@@ -650,12 +590,6 @@ async function toggleGaming() { render(await pywebview.api.toggle_gaming()); }
 async function toggleKillSwitch(v) { render(await pywebview.api.toggle_killswitch(v)); }
 async function toggleIranMain(v) { render(await pywebview.api.update_settings({ iranSplit: v })); }
 async function pingAll() { render(await pywebview.api.ping_all()); }
-async function testRealPing() {
-  if (S.connectionState !== 'CONNECTED') return;
-  document.getElementById('realPingVal').textContent = '...';
-  render(await pywebview.api.test_real_ping());
-  setTimeout(async () => { render(await pywebview.api.get_state()); }, 900);
-}
 async function refreshSub() { render(await pywebview.api.refresh_subscription()); }
 async function selectSrv(id) { closeModal('serversModal'); render(await pywebview.api.select_server(id)); }
 async function switchSub(id) { closeModal('subsModal'); render(await pywebview.api.switch_subscription(id)); }
