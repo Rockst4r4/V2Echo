@@ -3,7 +3,6 @@ name: Echolicense v1.0.0 Official Release (Android + PC)
 on:
   push:
     branches: [ "main" ]
-    tags: [ "v*" ]
   workflow_dispatch:
 
 permissions:
@@ -21,27 +20,46 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Apply custom branding logo if present
+      - name: Apply custom branding logo
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq python3-pil
           python3 - << 'PY_LOGO'
           import os
+          from PIL import Image
+
           src = next((p for p in ["branding/logo.png", "branding/logo.jpg", "branding/logo.jpeg"] if os.path.exists(p)), None)
           if src:
-              from PIL import Image
               img = Image.open(src).convert("RGBA")
               side = min(img.size)
               l, t = (img.width - side) // 2, (img.height - side) // 2
               sq = img.crop((l, t, l + side, t + side))
-              for folder, px in [("mipmap-mdpi", 48), ("mipmap-hdpi", 72), ("mipmap-xhdpi", 96), ("mipmap-xxhdpi", 144), ("mipmap-xxxhdpi", 192)]:
+
+              # حاشیه بسیار ظریف همرنگ پس‌زمینه تا در قاب گرد/مربعی One UI لبه‌های لوگو بریده نشوند
+              bg_color = sq.getpixel((4, 4))
+              pad = int(side * 0.06)
+              canvas = Image.new("RGBA", (side + pad * 2, side + pad * 2), bg_color)
+              canvas.paste(sq, (pad, pad))
+
+              for folder, px in [
+                  ("mipmap-mdpi", 48),
+                  ("mipmap-hdpi", 72),
+                  ("mipmap-xhdpi", 96),
+                  ("mipmap-xxhdpi", 144),
+                  ("mipmap-xxxhdpi", 192),
+              ]:
                   d = f"app/src/main/res/{folder}"
                   os.makedirs(d, exist_ok=True)
-                  resized = sq.resize((px, px), Image.LANCZOS)
+                  resized = canvas.resize((px, px), Image.LANCZOS)
                   resized.save(f"{d}/ic_launcher.png")
                   resized.save(f"{d}/ic_launcher_round.png")
-              for xml in ["app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml", "app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml"]:
+
+              for xml in [
+                  "app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml",
+                  "app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml",
+              ]:
                   if os.path.exists(xml):
                       os.remove(xml)
-              print("Applied custom raster logo to Android mipmaps!")
+              print("✅ Custom Echolicense logo applied to Android mipmaps!")
           else:
               print("Using built-in Echolicense vector logo.")
           PY_LOGO
@@ -159,7 +177,7 @@ jobs:
             ## Echolicense VPN v1.0.0 Official Release
             - **Android**: Signed Release APK (`Echolicense-Android-v1.0.0.apk`) & Google Play AAB (`Echolicense-Android-v1.0.0.aab`)
             - **Windows PC**: Portable Release (`Echolicense-Windows-v1.0.0.zip`) with System Proxy, Real-Ping TUN Mode, KillSwitch, Startup App, Auto-Connect & Graphical Split Tunneling
-            - **New**: Minimal Red Gaming Mode (WireGuard) & Echolicense Brand Logo
+            - **New**: Custom Echolicense Brand Logo & Minimal Red Gaming Mode (WireGuard)
           files: |
             release-files/Echolicense-Android-v1.0.0/*
             release-files/Echolicense-Windows-v1.0.0/*

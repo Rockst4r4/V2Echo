@@ -21,9 +21,9 @@ android {
             val ks = file("release.jks")
             if (ks.exists()) {
                 storeFile = ks
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "EcholicenseV1Release!"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "echolicense"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: "EcholicenseV1Release!"
+                storePassword = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() } ?: "EcholicenseV1Release!"
+                keyAlias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() } ?: "echolicense"
+                keyPassword = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() } ?: "EcholicenseV1Release!"
             }
         }
     }
