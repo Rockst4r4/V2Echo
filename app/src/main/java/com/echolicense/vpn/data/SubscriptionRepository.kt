@@ -26,7 +26,7 @@ class SubscriptionRepository {
         withContext(Dispatchers.IO) {
             val req = Request.Builder()
                 .url(subUrl.trim())
-                .header("User-Agent", "EcholicenseVPN/1.0 (v2rayNG compatible)")
+                .header("User-Agent", "EcholicenseVPN/1.1 (v2rayNG compatible)")
                 .build()
 
             httpClient.newCall(req).execute().use { resp ->
@@ -53,7 +53,7 @@ class SubscriptionRepository {
         var expire = 0L
 
         header.split(";").forEach { part ->
-            val kv = part.trim().split("=")
+            val kv = part.trim().split("=", limit = 2)
             if (kv.size == 2) {
                 val value = kv[1].trim().toLongOrNull() ?: 0L
                 when (kv[0].trim().lowercase()) {
@@ -78,9 +78,11 @@ class SubscriptionRepository {
         if (trimmed.contains("[Interface]", ignoreCase = true) &&
             trimmed.contains("[Peer]", ignoreCase = true)
         ) {
-            val endpointMatch = Regex("""Endpoint\s*=\s*([^\s:]+):(\d+)""").find(trimmed)
-            val host = endpointMatch?.groupValues?.getOrNull(1) ?: "wireguard"
-            val port = endpointMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 51820
+            val endpointLine = trimmed.lines()
+                .map { it.substringBefore("#").substringBefore(";").trim() }
+                .firstOrNull { it.startsWith("Endpoint", ignoreCase = true) }
+            val endpointVal = endpointLine?.split("=", limit = 2)?.getOrNull(1)?.trim().orEmpty()
+            val (host, port) = parseEndpointHostPort(endpointVal)
             return listOf(
                 ServerProfile(
                     id = UUID.randomUUID().toString(),
@@ -96,7 +98,7 @@ class SubscriptionRepository {
     }
 
     private fun tryDecodeBase64(raw: String): String {
-        if (raw.contains("://")) return raw
+        if (raw.contains("://") || raw.contains("[Interface]", ignoreCase = true)) return raw
         return try {
             val normalized = raw.replace("\n", "").replace("\r", "")
             String(Base64.decode(normalized, Base64.DEFAULT), Charsets.UTF_8)
@@ -118,10 +120,22 @@ class SubscriptionRepository {
         return result
     }
 
+    private fun splitFragment(line: String): Pair<String, String?> {
+        val idx = line.indexOf('#')
+        if (idx < 0) return line to null
+        return line.substring(0, idx) to line.substring(idx + 1)
+    }
+
+    private fun safeDecode(text: String?): String? {
+        if (text.isNullOrBlank()) return null
+        return runCatching { URLDecoder.decode(text, "UTF-8") }.getOrDefault(text)
+    }
+
     private fun parseUriProfile(line: String, protocol: VpnProtocol): ServerProfile? {
         return try {
-            val uri = URI(line)
-            val name = uri.fragment?.let { URLDecoder.decode(it, "UTF-8") } ?: "${protocol.name} Server"
+            val (base, frag) = splitFragment(line)
+            val uri = URI(base.replace(" ", "%20"))
+            val name = safeDecode(frag)?.ifBlank { null } ?: "${protocol.name} Server"
             ServerProfile(
                 id = UUID.randomUUID().toString(),
                 name = name,
@@ -137,11 +151,11 @@ class SubscriptionRepository {
 
     private fun parseVmessProfile(line: String): ServerProfile? {
         return try {
-            val b64 = line.removePrefix("vmess://")
+            val b64 = line.removePrefix("vmess://").trim()
             val json = JSONObject(String(Base64.decode(b64, Base64.DEFAULT)))
             ServerProfile(
                 id = UUID.randomUUID().toString(),
-                name = json.optString("ps", "VMess Server"),
+                name = json.optString("ps", "VMess Server").ifBlank { "VMess Server" },
                 protocol = VpnProtocol.VMESS,
                 rawConfig = line,
                 host = json.optString("add"),
@@ -154,32 +168,44 @@ class SubscriptionRepository {
 
     private fun parseWireGuardUri(line: String): ServerProfile? {
         return try {
-            val uri = URI(line)
-            val privateKey = URLDecoder.decode(uri.userInfo ?: return null, "UTF-8")
-            val host = uri.host ?: return null
-            val port = if (uri.port > 0) uri.port else 51820
-            val name = uri.fragment?.let { URLDecoder.decode(it, "UTF-8") } ?: "WireGuard ($host)"
+            val (base, frag) = splitFragment(line)
+            val withoutScheme = base.removePrefix("wireguard://").removePrefix("WIREGUARD://")
+            val atIdx = withoutScheme.indexOf('@')
+            if (atIdx <= 0) return null
 
-            val params = (uri.rawQuery ?: "").split("&").mapNotNull { kv ->
+            val privateKey = safeDecode(withoutScheme.substring(0, atIdx))?.trim() ?: return null
+            val rest = withoutScheme.substring(atIdx + 1)
+            val qIdx = rest.indexOf('?')
+            val hostPortRaw = (if (qIdx >= 0) rest.substring(0, qIdx) else rest).trimEnd('/')
+            val rawQuery = if (qIdx >= 0) rest.substring(qIdx + 1) else ""
+
+            val (host, port) = parseEndpointHostPort(hostPortRaw)
+            if (host.isBlank()) return null
+
+            val name = safeDecode(frag)?.ifBlank { null } ?: "WireGuard ($host)"
+            val params = rawQuery.split("&").mapNotNull { kv ->
                 val parts = kv.split("=", limit = 2)
-                if (parts.size == 2) parts[0].lowercase() to URLDecoder.decode(parts[1], "UTF-8") else null
+                if (parts.size == 2) parts[0].lowercase() to (safeDecode(parts[1]) ?: parts[1]) else null
             }.toMap()
 
-            val address = params["address"] ?: "10.0.0.2/32"
-            val publicKey = params["publickey"] ?: return null
-            val mtu = params["mtu"] ?: "1280"
-            val psk = params["presharedkey"]
+            val address = params["address"]?.ifBlank { null } ?: "10.0.0.2/32"
+            val publicKey = params["publickey"]?.trim() ?: return null
+            val mtu = params["mtu"]?.ifBlank { null } ?: "1280"
+            val psk = params["presharedkey"]?.trim()
+            val reserved = params["reserved"]?.trim()
 
+            val endpointFormatted = if (host.contains(":")) "[$host]:$port" else "$host:$port"
             val wgConf = buildString {
                 appendLine("[Interface]")
                 appendLine("PrivateKey = $privateKey")
                 appendLine("Address = $address")
                 appendLine("MTU = $mtu")
+                if (!reserved.isNullOrBlank()) appendLine("Reserved = $reserved")
                 appendLine()
                 appendLine("[Peer]")
                 appendLine("PublicKey = $publicKey")
                 if (!psk.isNullOrBlank()) appendLine("PresharedKey = $psk")
-                appendLine("Endpoint = $host:$port")
+                appendLine("Endpoint = $endpointFormatted")
                 appendLine("AllowedIPs = 0.0.0.0/0, ::/0")
                 appendLine("PersistentKeepalive = 25")
             }
@@ -197,17 +223,41 @@ class SubscriptionRepository {
         }
     }
 
+    private fun parseEndpointHostPort(endpoint: String): Pair<String, Int> {
+        val clean = endpoint.trim()
+        if (clean.startsWith("[")) {
+            val closeIdx = clean.indexOf(']')
+            if (closeIdx > 1) {
+                val h = clean.substring(1, closeIdx)
+                val p = clean.substring(closeIdx + 1).removePrefix(":").toIntOrNull() ?: 51820
+                return h to p
+            }
+        }
+        val lastColon = clean.lastIndexOf(':')
+        if (lastColon > 0) {
+            val h = clean.substring(0, lastColon).trim()
+            val p = clean.substring(lastColon + 1).trim().toIntOrNull() ?: 51820
+            return h to p
+        }
+        return clean.ifBlank { "wireguard" } to 51820
+    }
+
     suspend fun pingAllServers(servers: List<ServerProfile>): List<ServerProfile> =
         withContext(Dispatchers.IO) {
             servers.map { srv ->
                 async {
-                    val ms = measureTcpPing(srv.host, srv.port)
+                    val ms = if (srv.protocol == VpnProtocol.WIREGUARD) {
+                        // پورت UDP وایرگارد به TCP پاسخ نمی‌دهد؛ برای جلوگیری از خطا پینگ 1ms نمایش داده نمی‌شود
+                        measureTcpPing(srv.host, srv.port, 900)
+                    } else {
+                        measureTcpPing(srv.host, srv.port, 1800)
+                    }
                     srv.copy(pingMs = ms)
                 }
             }.awaitAll().sortedBy { if (it.pingMs < 0) Int.MAX_VALUE else it.pingMs }
         }
 
-    private fun measureTcpPing(host: String, port: Int, timeoutMs: Int = 1800): Int {
+    private fun measureTcpPing(host: String, port: Int, timeoutMs: Int): Int {
         return try {
             val start = System.currentTimeMillis()
             Socket().use { socket ->

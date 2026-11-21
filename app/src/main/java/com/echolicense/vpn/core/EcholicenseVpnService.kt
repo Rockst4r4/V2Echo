@@ -8,10 +8,10 @@ import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.echolicense.vpn.data.ConnectionState
 import com.echolicense.vpn.data.IranSplitTunnel
-import com.echolicense.vpn.data.VpnProtocol
 import kotlinx.coroutines.*
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
@@ -23,6 +23,8 @@ class EcholicenseVpnService : VpnService() {
     companion object {
         const val ACTION_CONNECT = "com.echolicense.vpn.CONNECT"
         const val ACTION_DISCONNECT = "com.echolicense.vpn.DISCONNECT"
+        const val ACTION_RECONNECT = "com.echolicense.vpn.RECONNECT"
+        private const val TAG = "EcholicenseVPN"
         private const val CHANNEL_ID = "echolicense_vpn_channel"
         private const val NOTIF_ID = 1001
     }
@@ -30,33 +32,44 @@ class EcholicenseVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var tunInterface: ParcelFileDescriptor? = null
     private var coreController: CoreController? = null
-    private var wireGuardEngine: WireGuardEngine? = null
     private var telemetryJob: Job? = null
+    private var connectJob: Job? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_DISCONNECT -> stopVpn()
+            ACTION_DISCONNECT -> stopVpn(stopSelfNow = true)
+            ACTION_RECONNECT -> {
+                stopVpn(stopSelfNow = false)
+                startVpn()
+            }
             ACTION_CONNECT -> startVpn()
         }
         return START_STICKY
     }
 
-    private fun ensureGeoAssetsCopied() {
+    private fun ensureGeoAssetsCopied(): Boolean {
+        var allReady = true
         listOf("geoip.dat", "geosite.dat").forEach { assetName ->
             val outFile = File(filesDir, assetName)
-            if (!outFile.exists()) {
+            if (!outFile.exists() || outFile.length() == 0L) {
                 runCatching {
                     assets.open(assetName).use { input ->
                         outFile.outputStream().use { output -> input.copyTo(output) }
                     }
+                }.onFailure {
+                    Log.w(TAG, "Geo asset copy failed ($assetName): ${it.message}")
+                    allReady = false
                 }
             }
+            if (!outFile.exists() || outFile.length() == 0L) allReady = false
         }
+        return allReady
     }
 
     private fun startVpn() {
         val current = VpnStateManager.state.value
         val server = current.activeServer ?: return
+        val mtu = current.mtu.coerceIn(1200, 1500)
 
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification("در حال انتخاب بهترین DNS و اتصال..."))
@@ -65,59 +78,68 @@ class EcholicenseVpnService : VpnService() {
             it.copy(connectionState = ConnectionState.CONNECTING, statusMessage = "در حال تست DNS خودکار...")
         }
 
-        scope.launch {
+        connectJob?.cancel()
+        connectJob = scope.launch {
             try {
-                ensureGeoAssetsCopied()
+                val hasGeoFiles = ensureGeoAssetsCopied()
                 val bestDns = SmartDnsManager.resolveBestWorkingDns()
                 VpnStateManager.update {
                     it.copy(
                         activeDns = bestDns,
-                        statusMessage = "متصل شدن با DNS ${bestDns.name}..."
+                        statusMessage = "اتصال ${server.protocol.name} (MTU $mtu) • DNS ${bestDns.name}"
                     )
                 }
 
-                if (server.protocol == VpnProtocol.WIREGUARD) {
-                    val wg = wireGuardEngine ?: WireGuardEngine(this@EcholicenseVpnService).also {
-                        wireGuardEngine = it
-                    }
-                    wg.connect(server.rawConfig, bestDns, current.iranSplitEnabled)
-                } else {
-                    startXrayTunnel(
-                        configJson = XrayConfigBuilder.buildConfigJson(
-                            profile = server,
-                            primaryDns = bestDns,
-                            enableIranSplit = current.iranSplitEnabled,
-                            enableFragment = current.fragmentEnabled
-                        ),
-                        dnsIp = bestDns.ipv4,
-                        enableIranSplit = current.iranSplitEnabled
-                    )
-                }
+                val configJson = XrayConfigBuilder.buildConfigJson(
+                    profile = server,
+                    primaryDns = bestDns,
+                    enableIranSplit = current.iranSplitEnabled,
+                    mtu = mtu,
+                    hasGeoFiles = hasGeoFiles
+                )
+                startXrayTun(
+                    configJson = configJson,
+                    dnsIp = bestDns.ipv4,
+                    mtu = mtu,
+                    enableIranSplit = current.iranSplitEnabled
+                )
 
                 VpnStateManager.setConnected()
-                updateNotification("متصل به ${server.name} • DNS: ${bestDns.name}")
+                updateNotification("متصل به ${server.name} • MTU: $mtu")
                 startTelemetryLoop()
 
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e(TAG, "VPN Start Error", t)
                 VpnStateManager.update {
                     it.copy(
                         connectionState = ConnectionState.ERROR,
-                        statusMessage = "خطای اتصال: ${e.localizedMessage ?: "نامشخص"}"
+                        statusMessage = "خطا: ${t.localizedMessage ?: t.javaClass.simpleName}"
                     )
                 }
-                stopVpn()
+                stopVpn(stopSelfNow = true)
             }
         }
     }
 
-    private fun startXrayTunnel(configJson: String, dnsIp: String, enableIranSplit: Boolean) {
+    private fun startXrayTun(
+        configJson: String,
+        dnsIp: String,
+        mtu: Int,
+        enableIranSplit: Boolean
+    ) {
         val builder = Builder()
             .setSession("Echolicense VPN")
-            .setMtu(1500)
+            .setMtu(mtu)
             .addAddress("10.10.10.2", 30)
             .addRoute("0.0.0.0", 0)
             .addDnsServer(dnsIp)
             .addDnsServer("1.0.0.1")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setMetered(false)
+        }
 
         val bypassPackages = if (enableIranSplit) {
             IranSplitTunnel.getInstalledBypassPackages(this)
@@ -134,7 +156,10 @@ class EcholicenseVpnService : VpnService() {
         val controller = Libv2ray.newCoreController(object : CoreCallbackHandler {
             override fun startup(): Long = 0
             override fun shutdown(): Long = 0
-            override fun onEmitStatus(p0: Long, p1: String?): Long = 0
+            override fun onEmitStatus(p0: Long, p1: String?): Long {
+                if (!p1.isNullOrBlank()) Log.i(TAG, "Xray status [$p0]: $p1")
+                return 0
+            }
         })
         controller.startLoop(configJson, tunInterface!!.fd)
         coreController = controller
@@ -168,16 +193,18 @@ class EcholicenseVpnService : VpnService() {
         }
     }
 
-    private fun stopVpn() {
+    private fun stopVpn(stopSelfNow: Boolean) {
+        connectJob?.cancel()
         telemetryJob?.cancel()
         runCatching { coreController?.stopLoop() }
         coreController = null
         runCatching { tunInterface?.close() }
         tunInterface = null
-        wireGuardEngine?.disconnect()
-        VpnStateManager.setDisconnected()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        if (stopSelfNow) {
+            VpnStateManager.setDisconnected()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     private fun createNotificationChannel() {
@@ -203,8 +230,13 @@ class EcholicenseVpnService : VpnService() {
         getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text))
     }
 
+    override fun onRevoke() {
+        stopVpn(stopSelfNow = true)
+        super.onRevoke()
+    }
+
     override fun onDestroy() {
-        stopVpn()
+        stopVpn(stopSelfNow = true)
         scope.cancel()
         super.onDestroy()
     }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.echolicense.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     buildTypes {
@@ -24,6 +24,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 
@@ -46,11 +52,8 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
     implementation("androidx.core:core-ktx:1.15.0")
 
-    // هسته آماده V2Ray / Xray (AndroidLibXrayLite)
+    // هسته آماده V2Ray / Xray (پشتیبانی یکپارچه از VLESS, VMess, Trojan و WireGuard)
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
-
-    // موتور رسمی WireGuard
-    implementation("com.wireguard.android:tunnel:1.0.20230706")
 
     // Jetpack Compose & Material 3
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")

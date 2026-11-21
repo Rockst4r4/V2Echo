@@ -11,29 +11,41 @@ import java.net.URLDecoder
 
 object XrayConfigBuilder {
 
+    private val IPV4_REGEX = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
+
     fun buildConfigJson(
         profile: ServerProfile,
         primaryDns: DnsProvider,
         enableIranSplit: Boolean,
-        enableFragment: Boolean,
-        socksPort: Int = 10808
+        mtu: Int,
+        hasGeoFiles: Boolean
     ): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
 
-        // DNS هوشمند با Failover و تفکیک دامنه‌های ایرانی
+        // 1. تنظیمات DNS هوشمند با رفع بن‌بست دامنه سرور
         val dnsServers = JSONArray()
-        dnsServers.put(primaryDns.dohUrl)
-        dnsServers.put(primaryDns.ipv4)
-        dnsServers.put("https://dns.quad9.net/dns-query")
+        if (profile.host.isNotBlank() && !IPV4_REGEX.matches(profile.host) && !profile.host.contains(":")) {
+            dnsServers.put(
+                JSONObject()
+                    .put("address", "localhost")
+                    .put("domains", JSONArray().put("full:${profile.host}"))
+            )
+        }
         if (enableIranSplit) {
+            val irDomains = JSONArray().put("domain:ir")
+            if (hasGeoFiles) irDomains.put("geosite:ir")
             dnsServers.put(
                 JSONObject()
                     .put("address", SmartDnsManager.IRAN_DIRECT_DNS)
-                    .put("domains", JSONArray().put("geosite:ir").put("domain:ir"))
-                    .put("expectIPs", JSONArray().put("geoip:ir"))
+                    .put("domains", irDomains)
             )
         }
+        dnsServers.put(primaryDns.dohUrl)
+        dnsServers.put(primaryDns.ipv4)
+        dnsServers.put("8.8.8.8")
+        dnsServers.put("localhost")
+
         root.put(
             "dns",
             JSONObject()
@@ -41,78 +53,89 @@ object XrayConfigBuilder {
                 .put("queryStrategy", "UseIPv4")
         )
 
-        val inbound = JSONObject()
-            .put("tag", "socks")
-            .put("port", socksPort)
-            .put("listen", "127.0.0.1")
-            .put("protocol", "socks")
-            .put("settings", JSONObject().put("auth", "noauth").put("udp", true))
+        // 2. ورودی تماماً TUN برای کل ترافیک دستگاه
+        val safeMtu = mtu.coerceIn(1200, 1500)
+        val tunInbound = JSONObject()
+            .put("tag", "tun")
+            .put("protocol", "tun")
+            .put(
+                "settings",
+                JSONObject()
+                    .put("name", "xray0")
+                    .put("MTU", safeMtu)
+                    .put("userLevel", 8)
+            )
             .put(
                 "sniffing",
                 JSONObject()
                     .put("enabled", true)
                     .put("destOverride", JSONArray().put("http").put("tls").put("quic"))
-                    .put("routeOnly", true)
+                    .put("routeOnly", false)
             )
-        root.put("inbounds", JSONArray().put(inbound))
+        root.put("inbounds", JSONArray().put(tunInbound))
 
+        // 3. خروجی اصلی (شامل WireGuard بومی، VLESS، VMess، Trojan)
         val outbounds = JSONArray()
-        val proxyOutbound = if (profile.protocol == VpnProtocol.VMESS) {
-            buildVmessOutbound(profile, enableFragment)
-        } else {
-            buildUriOutbound(profile, enableFragment)
+        val proxyOutbound = when (profile.protocol) {
+            VpnProtocol.WIREGUARD -> buildWireGuardOutbound(profile, safeMtu)
+            VpnProtocol.VMESS -> buildVmessOutbound(profile)
+            VpnProtocol.VLESS, VpnProtocol.TROJAN -> buildUriOutbound(profile)
         }
         outbounds.put(proxyOutbound)
-
-        if (enableFragment) {
-            outbounds.put(
-                JSONObject()
-                    .put("tag", "fragment")
-                    .put("protocol", "freedom")
-                    .put(
-                        "settings",
-                        JSONObject().put(
-                            "fragment",
-                            JSONObject()
-                                .put("packets", "tlshello")
-                                .put("length", "10-50")
-                                .put("interval", "10-20")
-                        )
-                    )
-            )
-        }
-
-        outbounds.put(JSONObject().put("tag", "direct").put("protocol", "freedom"))
+        outbounds.put(
+            JSONObject()
+                .put("tag", "direct")
+                .put("protocol", "freedom")
+                .put("settings", JSONObject().put("domainStrategy", "UseIPv4"))
+        )
+        outbounds.put(JSONObject().put("tag", "dns-out").put("protocol", "dns"))
         outbounds.put(JSONObject().put("tag", "block").put("protocol", "blackhole"))
         root.put("outbounds", outbounds)
 
+        // 4. قوانین مسیریابی (DNS + Split Tunnel ایران)
         val rules = JSONArray()
         rules.put(
             JSONObject()
                 .put("type", "field")
-                .put("ip", JSONArray().put("geoip:private"))
-                .put("outboundTag", "direct")
+                .put("inboundTag", JSONArray().put("tun"))
+                .put("port", 53)
+                .put("outboundTag", "dns-out")
         )
-        if (enableIranSplit) {
-            rules.put(
-                JSONObject()
-                    .put("type", "field")
-                    .put("domain", JSONArray().put("geosite:ir").put("regexp:.*\\.ir$"))
-                    .put("outboundTag", "direct")
-            )
-            rules.put(
-                JSONObject()
-                    .put("type", "field")
-                    .put("ip", JSONArray().put("geoip:ir"))
-                    .put("outboundTag", "direct")
-            )
+
+        val privateIps = if (hasGeoFiles) {
+            JSONArray().put("geoip:private")
+        } else {
+            JSONArray()
+                .put("10.0.0.0/8")
+                .put("127.0.0.0/8")
+                .put("172.16.0.0/12")
+                .put("192.168.0.0/16")
         }
         rules.put(
             JSONObject()
                 .put("type", "field")
-                .put("domain", JSONArray().put("geosite:category-ads-all"))
-                .put("outboundTag", "block")
+                .put("ip", privateIps)
+                .put("outboundTag", "direct")
         )
+
+        if (enableIranSplit) {
+            val irDomains = JSONArray().put("domain:ir")
+            if (hasGeoFiles) irDomains.put("geosite:ir")
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("domain", irDomains)
+                    .put("outboundTag", "direct")
+            )
+            if (hasGeoFiles) {
+                rules.put(
+                    JSONObject()
+                        .put("type", "field")
+                        .put("ip", JSONArray().put("geoip:ir"))
+                        .put("outboundTag", "direct")
+                )
+            }
+        }
 
         root.put(
             "routing",
@@ -124,14 +147,104 @@ object XrayConfigBuilder {
         return root.toString(2)
     }
 
-    private fun buildVmessOutbound(profile: ServerProfile, enableFragment: Boolean): JSONObject {
-        val b64 = profile.rawConfig.removePrefix("vmess://")
+    private fun buildWireGuardOutbound(profile: ServerProfile, mtu: Int): JSONObject {
+        var section = ""
+        var secretKey = ""
+        val addresses = mutableListOf<String>()
+        var publicKey = ""
+        var preSharedKey = ""
+        var endpoint = ""
+        var keepAlive = 25
+        var reservedRaw = ""
+
+        for (rawLine in profile.rawConfig.lines()) {
+            val line = rawLine.substringBefore("#").substringBefore(";").trim()
+            if (line.isEmpty()) continue
+            if (line.startsWith("[") && line.endsWith("]")) {
+                section = line.lowercase()
+                continue
+            }
+            val parts = line.split("=", limit = 2)
+            if (parts.size != 2) continue
+            val key = parts[0].trim().lowercase()
+            val value = parts[1].trim()
+
+            when (section) {
+                "[interface]" -> when (key) {
+                    "privatekey" -> secretKey = value
+                    "address" -> value.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach(addresses::add)
+                    "reserved" -> reservedRaw = value
+                }
+                "[peer]" -> when (key) {
+                    "publickey" -> publicKey = value
+                    "presharedkey" -> preSharedKey = value
+                    "endpoint" -> endpoint = value
+                    "persistentkeepalive" -> keepAlive = value.toIntOrNull() ?: 25
+                    "reserved" -> if (reservedRaw.isBlank()) reservedRaw = value
+                }
+            }
+        }
+
+        if (secretKey.isBlank() || publicKey.isBlank()) {
+            throw IllegalArgumentException("کلید PrivateKey یا PublicKey در کانفیگ WireGuard ناقص است.")
+        }
+        if (endpoint.isBlank()) {
+            endpoint = if (profile.host.contains(":")) "[${profile.host}]:${profile.port}" else "${profile.host}:${profile.port}"
+        }
+        if (addresses.isEmpty()) {
+            addresses.add("10.0.0.2/32")
+        }
+
+        val peer = JSONObject()
+            .put("publicKey", publicKey)
+            .put("endpoint", endpoint)
+            .put("keepAlive", keepAlive.coerceAtLeast(10))
+            .put("allowedIPs", JSONArray().put("0.0.0.0/0").put("::/0"))
+        if (preSharedKey.isNotBlank()) {
+            peer.put("preSharedKey", preSharedKey)
+        }
+
+        val settings = JSONObject()
+            .put("secretKey", secretKey)
+            .put("address", JSONArray(addresses))
+            .put("peers", JSONArray().put(peer))
+            .put("mtu", mtu)
+            .put("kernelMode", false)
+            .put("domainStrategy", "ForceIPv4")
+
+        parseReservedBytes(reservedRaw)?.let { bytes ->
+            settings.put("reserved", JSONArray(bytes))
+        }
+
+        return JSONObject()
+            .put("tag", "proxy")
+            .put("protocol", "wireguard")
+            .put("settings", settings)
+    }
+
+    private fun parseReservedBytes(raw: String): List<Int>? {
+        val cleaned = raw.trim().removePrefix("[").removeSuffix("]").trim()
+        if (cleaned.isEmpty()) return null
+        if (cleaned.contains(",")) {
+            val nums = cleaned.split(",").mapNotNull { it.trim().toIntOrNull() }
+            if (nums.size == 3 && nums.all { it in 0..255 }) return nums
+        }
+        return try {
+            val bytes = Base64.decode(cleaned, Base64.DEFAULT)
+            if (bytes.size == 3) bytes.map { it.toInt() and 0xFF } else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun buildVmessOutbound(profile: ServerProfile): JSONObject {
+        val b64 = profile.rawConfig.removePrefix("vmess://").trim()
         val vmess = JSONObject(String(Base64.decode(b64, Base64.DEFAULT)))
         val network = vmess.optString("net", "tcp")
         val tls = vmess.optString("tls", "none")
         val hostHeader = vmess.optString("host", profile.host)
         val path = vmess.optString("path", "/")
-        val sni = vmess.optString("sni", hostHeader)
+        val sni = vmess.optString("sni", hostHeader).ifBlank { profile.host }
 
         val streamSettings = JSONObject()
             .put("network", network)
@@ -140,19 +253,26 @@ object XrayConfigBuilder {
         if (tls == "tls") {
             streamSettings.put(
                 "tlsSettings",
-                JSONObject().put("serverName", sni).put("fingerprint", "chrome")
+                JSONObject()
+                    .put("serverName", sni)
+                    .put("fingerprint", vmess.optString("fp", "chrome").ifBlank { "chrome" })
+                    .put("allowInsecure", false)
             )
         }
-        if (network == "ws") {
-            streamSettings.put(
+        when (network) {
+            "ws" -> streamSettings.put(
                 "wsSettings",
                 JSONObject().put("path", path).put("headers", JSONObject().put("Host", hostHeader))
             )
-        } else if (network == "grpc") {
-            streamSettings.put("grpcSettings", JSONObject().put("serviceName", path))
-        }
-        if (enableFragment) {
-            streamSettings.put("sockopt", JSONObject().put("dialerProxy", "fragment"))
+            "grpc" -> streamSettings.put("grpcSettings", JSONObject().put("serviceName", path))
+            "httpupgrade" -> streamSettings.put(
+                "httpupgradeSettings",
+                JSONObject().put("path", path).put("host", hostHeader)
+            )
+            "xhttp", "splithttp" -> streamSettings.put(
+                "xhttpSettings",
+                JSONObject().put("path", path).put("host", hostHeader)
+            )
         }
 
         val user = JSONObject()
@@ -178,15 +298,20 @@ object XrayConfigBuilder {
             )
     }
 
-    private fun buildUriOutbound(profile: ServerProfile, enableFragment: Boolean): JSONObject {
-        val uri = URI(profile.rawConfig)
+    private fun buildUriOutbound(profile: ServerProfile): JSONObject {
+        val baseUri = profile.rawConfig.substringBefore("#").replace(" ", "%20")
+        val uri = URI(baseUri)
         val params = (uri.rawQuery ?: "").split("&").mapNotNull { kv ->
             val p = kv.split("=", limit = 2)
-            if (p.size == 2) p[0] to URLDecoder.decode(p[1], "UTF-8") else null
+            if (p.size == 2) {
+                val v = runCatching { URLDecoder.decode(p[1], "UTF-8") }.getOrDefault(p[1])
+                p[0] to v
+            } else null
         }.toMap()
 
         val network = params["type"] ?: "tcp"
         val security = params["security"] ?: "none"
+        val userSecret = runCatching { URLDecoder.decode(uri.userInfo ?: "", "UTF-8") }.getOrDefault(uri.userInfo ?: "")
 
         val streamSettings = JSONObject()
             .put("network", network)
@@ -203,30 +328,44 @@ object XrayConfigBuilder {
                     .put("spiderX", params["spx"] ?: "/")
             )
         } else if (security == "tls") {
-            streamSettings.put(
-                "tlsSettings",
-                JSONObject()
-                    .put("serverName", params["sni"] ?: profile.host)
-                    .put("fingerprint", params["fp"] ?: "chrome")
-            )
+            val tlsObj = JSONObject()
+                .put("serverName", params["sni"] ?: profile.host)
+                .put("fingerprint", params["fp"] ?: "chrome")
+                .put("allowInsecure", params["allowInsecure"] == "1" || params["insecure"] == "1")
+            params["alpn"]?.takeIf { it.isNotBlank() }?.let { rawAlpn ->
+                val arr = JSONArray()
+                rawAlpn.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach(arr::put)
+                if (arr.length() > 0) tlsObj.put("alpn", arr)
+            }
+            streamSettings.put("tlsSettings", tlsObj)
         }
 
-        if (network == "ws") {
-            streamSettings.put(
+        when (network) {
+            "ws" -> streamSettings.put(
                 "wsSettings",
                 JSONObject()
                     .put("path", params["path"] ?: "/")
                     .put("headers", JSONObject().put("Host", params["host"] ?: profile.host))
             )
-        } else if (network == "grpc") {
-            streamSettings.put(
+            "grpc" -> streamSettings.put(
                 "grpcSettings",
-                JSONObject().put("serviceName", params["serviceName"] ?: "")
+                JSONObject()
+                    .put("serviceName", params["serviceName"] ?: "")
+                    .put("multiMode", params["mode"] == "multi")
             )
-        }
-
-        if (enableFragment) {
-            streamSettings.put("sockopt", JSONObject().put("dialerProxy", "fragment"))
+            "httpupgrade" -> streamSettings.put(
+                "httpupgradeSettings",
+                JSONObject()
+                    .put("path", params["path"] ?: "/")
+                    .put("host", params["host"] ?: profile.host)
+            )
+            "xhttp", "splithttp" -> streamSettings.put(
+                "xhttpSettings",
+                JSONObject()
+                    .put("path", params["path"] ?: "/")
+                    .put("host", params["host"] ?: profile.host)
+                    .put("mode", params["mode"] ?: "auto")
+            )
         }
 
         val outbound = JSONObject()
@@ -242,13 +381,13 @@ object XrayConfigBuilder {
                         JSONObject()
                             .put("address", profile.host)
                             .put("port", profile.port)
-                            .put("password", uri.userInfo)
+                            .put("password", userSecret)
                     )
                 )
             )
         } else {
             val user = JSONObject()
-                .put("id", uri.userInfo)
+                .put("id", userSecret)
                 .put("encryption", params["encryption"] ?: "none")
             params["flow"]?.takeIf { it.isNotBlank() }?.let { user.put("flow", it) }
 
