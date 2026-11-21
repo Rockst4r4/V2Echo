@@ -1,12 +1,10 @@
-#!/usr/bin/env bash
-set -e
-cd ~/EcholicenseVPN
-
-python3 - << 'PY_SEND'
+#!/usr/bin/env python3
 import json
+import subprocess
 from pathlib import Path
 
-f = Path("announcements.json")
+repo_dir = Path.home() / "EcholicenseVPN"
+f = repo_dir / "announcements.json"
 cur = {}
 if f.exists():
     try:
@@ -48,9 +46,8 @@ payload = {
 
 f.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(f"\n✅ فایل announcements.json با شناسه #{next_id} ذخیره شد.")
-PY_SEND
 
-git add announcements.json
-git commit -m "Push notification update"
-git push origin main
-echo "🚀 نوتیفیکیشن با موفقیت منتشر شد! (بدون بیلد مجدد اپ)"
+subprocess.run(["git", "add", "announcements.json"], cwd=repo_dir, check=True)
+subprocess.run(["git", "commit", "-m", f"Push notification #{next_id}"], cwd=repo_dir, check=True)
+subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, check=True)
+print("🚀 نوتیفیکیشن با موفقیت منتشر شد! (بدون بیلد مجدد اپ)")
