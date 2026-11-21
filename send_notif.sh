@@ -13,22 +13,36 @@ if f.exists():
         cur = {}
 
 next_id = int(cur.get("id") or 0) + 1
-print(f"\n=== ارسال نوتیفیکیشن جدید (ID: #{next_id}) ===")
-title = input("عنوان نوتیفیکیشن (Title): ").strip()
+print(f"\n=== Send New Notification (ID: #{next_id}) ===")
+print("(Type 'off' as Title to disable the current banner)\n")
+
+title = input("Title: ").strip()
 if not title:
-    print("لغو شد (عنوان خالی است).")
+    print("Cancelled (empty title).")
     raise SystemExit(1)
 
-message = input("متن پیام (Message): ").strip()
-promo = input("کد تخفیف (اختیاری - برای خالی Enter بزنید): ").strip()
-btn = input("متن دکمه داخل بنر (مثلاً ورود به ربات - اختیاری): ").strip()
-url = input("لینک مقصد با کلیک روی نوتیف (پیش‌فرض https://t.me/echopress_bot): ").strip() or "https://t.me/echopress_bot"
-target = (input("ارسال برای (all / android / pc) [پیش‌فرض all]: ").strip().lower() or "all")
+if title.lower() == "off":
+    payload = dict(cur)
+    payload["id"] = next_id
+    payload["active"] = False
+    f.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    subprocess.run(["git", "add", "announcements.json"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "commit", "-m", f"Disable announcement #{next_id}"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, check=True)
+    print("Done! Banner disabled for all users.")
+    raise SystemExit(0)
+
+message = input("Message: ").strip()
+promo = input("Promo Code (optional, press Enter to skip): ").strip()
+btn = input("Banner Button Text (optional, e.g. Open Bot): ").strip()
+url = input("Click URL [default: https://t.me/echopress_bot]: ").strip() or "https://t.me/echopress_bot"
+
+target = (input("Target platform (all / android / pc) [default: all]: ").strip().lower() or "all")
 if target not in ("all", "android", "pc"):
     target = "all"
 
-push_ans = (input("ارسال نوتیفیکیشن سیستمی روی گوشی/ویندوز؟ (y/n) [پیش‌فرض y]: ").strip().lower() or "y")
-banner_ans = (input("نمایش بنر داخل صفحه اصلی اپ هم باشد؟ (y/n) [پیش‌فرض y]: ").strip().lower() or "y")
+push_ans = (input("Send system push notification? (y/n) [default: y]: ").strip().lower() or "y")
+banner_ans = (input("Show in-app banner? (y/n) [default: y]: ").strip().lower() or "y")
 
 payload = {
     "id": next_id,
@@ -45,9 +59,9 @@ payload = {
 }
 
 f.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-print(f"\n✅ فایل announcements.json با شناسه #{next_id} ذخیره شد.")
+print(f"\nSaved announcements.json (ID #{next_id}). Pushing to GitHub...")
 
 subprocess.run(["git", "add", "announcements.json"], cwd=repo_dir, check=True)
 subprocess.run(["git", "commit", "-m", f"Push notification #{next_id}"], cwd=repo_dir, check=True)
 subprocess.run(["git", "push", "origin", "main"], cwd=repo_dir, check=True)
-print("🚀 نوتیفیکیشن با موفقیت منتشر شد! (بدون بیلد مجدد اپ)")
+print("Done! Notification published without rebuilding apps.")
