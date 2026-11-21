@@ -132,7 +132,7 @@ jobs:
           pip install -r requirements.txt
           python generate_icon.py
 
-      - name: Download sing-box v1.10.7 & Wintun
+      - name: Download sing-box, Wintun, Native WireGuard-NT & Iran Rule-Sets
         shell: pwsh
         working-directory: pc
         run: |
@@ -142,6 +142,17 @@ jobs:
           Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "wintun.zip"
           Expand-Archive -Path "wintun.zip" -DestinationPath "wintun_tmp" -Force
           Copy-Item "wintun_tmp\wintun\bin\amd64\wintun.dll" -Destination "wintun.dll"
+          try {
+            Invoke-WebRequest -Uri "https://download.wireguard.com/windows-client/wireguard-amd64-0.5.3.msi" -OutFile "wg.msi"
+            Start-Process msiexec.exe -ArgumentList "/a `"$PWD\wg.msi`" /qb TARGETDIR=`"$PWD\wg_tmp`"" -Wait
+            $wgExe = Get-ChildItem -Path "wg_tmp" -Recurse -Filter "wireguard.exe" | Select-Object -First 1
+            if ($wgExe) {
+              Copy-Item $wgExe.FullName -Destination "wireguard.exe"
+              Get-ChildItem -Path $wgExe.DirectoryName -Filter "*.dll" | ForEach-Object { Copy-Item $_.FullName -Destination $_.Name }
+            }
+          } catch { Write-Host "WireGuard extract skipped: $_" }
+          try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs" -OutFile "geoip-ir.srs" } catch {}
+          try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-ir.srs" -OutFile "geosite-ir.srs" } catch {}
 
       - name: Build Windows EcholicenseVPN.exe
         shell: pwsh
@@ -152,6 +163,9 @@ jobs:
           Copy-Item "dist\EcholicenseVPN.exe" -Destination "release_pkg\"
           Copy-Item "sing-box.exe" -Destination "release_pkg\"
           Copy-Item "wintun.dll" -Destination "release_pkg\"
+          foreach ($opt in @("wireguard.exe", "tunnel.dll", "wireguard.dll", "geoip-ir.srs", "geosite-ir.srs")) {
+            if (Test-Path $opt) { Copy-Item $opt -Destination "release_pkg\" }
+          }
           Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v1.0.0.zip" -Force
 
       - name: Upload Windows PC Release Artifact

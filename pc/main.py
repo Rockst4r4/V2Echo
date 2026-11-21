@@ -34,6 +34,7 @@ SOCKS_PORT = 10808
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 PROXY_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 KILLSWITCH_PREFIX = "EcholicenseKillSwitch"
+WG_TUNNEL_NAME = "EcholicenseWG"
 ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 
@@ -272,6 +273,7 @@ class EcholicenseApi:
         self._state_file = self._data_dir / "state.json"
         self._log_file = self._data_dir / "core.log"
         self._proc: subprocess.Popen | None = None
+        self._native_wg_active = False
         self._log_fh = None
         self._active_port = SOCKS_PORT
         self._connected_at = 0.0
@@ -398,6 +400,89 @@ class EcholicenseApi:
         singbox_exe = str(get_app_dir() / "sing-box.exe")
         if os.path.exists(singbox_exe):
             self._run_hidden(["netsh", "advfirewall", "firewall", "add", "rule", f"name={KILLSWITCH_PREFIX}_AllowCore", "dir=out", "action=allow", f"program={singbox_exe}"])
+
+
+    def _build_native_wg_conf(self, raw_conf: str, dns_ip: str, mtu: int) -> str | None:
+        section = ""
+        priv_key, pub_key, psk, endpoint, addrs = "", "", "", "", []
+        for raw_ln in raw_conf.splitlines():
+            ln = raw_ln.split("#", 1)[0].split(";", 1)[0].strip()
+            if not ln:
+                continue
+            if ln.startswith("[") and ln.endswith("]"):
+                section = ln.lower()
+                continue
+            if "=" not in ln:
+                continue
+            k, v = [x.strip() for x in ln.split("=", 1)]
+            kl = k.lower()
+            if kl == "reserved" and v:
+                return None  # کانفیگ‌های WARP دارای Reserved روی sing-box اجرا می‌شوند
+            if section == "[interface]":
+                if kl == "privatekey":
+                    priv_key = v
+                elif kl == "address":
+                    addrs = [a.strip() for a in v.split(",") if a.strip()]
+            elif section == "[peer]":
+                if kl == "publickey":
+                    pub_key = v
+                elif kl == "presharedkey":
+                    psk = v
+                elif kl == "endpoint":
+                    endpoint = v
+        if not priv_key or not pub_key or not endpoint:
+            return None
+        dns_clean = dns_ip if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", dns_ip) else "1.1.1.1"
+        lines = [
+            "[Interface]",
+            f"PrivateKey = {priv_key}",
+            f"Address = {', '.join(addrs) if addrs else '10.0.0.2/32'}",
+            f"DNS = {dns_clean}, 1.0.0.1",
+            f"MTU = {max(1200, min(1500, int(mtu)))}",
+            "",
+            "[Peer]",
+            f"PublicKey = {pub_key}",
+            f"Endpoint = {endpoint}",
+            "AllowedIPs = 0.0.0.0/0",
+            "PersistentKeepalive = 25",
+        ]
+        if psk:
+            lines.append(f"PresharedKey = {psk}")
+        return "\n".join(lines) + "\n"
+
+    def _start_native_wg(self, srv: dict, dns_addr: str, mtu: int) -> bool:
+        wg_exe = get_app_dir() / "wireguard.exe"
+        if os.name != "nt" or not wg_exe.exists():
+            return False
+        if self._state.get("splitApps"):
+            return False
+        dns_ip = "94.140.14.14" if self._state.get("adBlocker") and not (self._state.get("manualDns") or "").strip() else dns_addr
+        conf_text = self._build_native_wg_conf(srv["rawConfig"], dns_ip, mtu)
+        if not conf_text:
+            return False
+        conf_dir = Path(os.environ.get("ProgramData", str(self._data_dir))) / APP_NAME
+        conf_dir.mkdir(parents=True, exist_ok=True)
+        conf_path = conf_dir / f"{WG_TUNNEL_NAME}.conf"
+        conf_path.write_text(conf_text, encoding="utf-8")
+
+        self._run_hidden([str(wg_exe), "/uninstalltunnelservice", WG_TUNNEL_NAME])
+        time.sleep(0.4)
+        rc = self._run_hidden([str(wg_exe), "/installtunnelservice", str(conf_path)])
+        if rc != 0:
+            self._log_file.write_text(f"Native WireGuard install failed (rc={rc}), falling back to sing-box\n", encoding="utf-8")
+            return False
+        time.sleep(1.0)
+        self._native_wg_active = True
+        self._log_file.write_text(f"Native WireGuard-NT kernel tunnel started ({srv['name']}, MTU={mtu})\n", encoding="utf-8")
+        return True
+
+    def _stop_native_wg(self):
+        if os.name != "nt":
+            return
+        wg_exe = get_app_dir() / "wireguard.exe"
+        if wg_exe.exists() and self._native_wg_active:
+            self._run_hidden([str(wg_exe), "/uninstalltunnelservice", WG_TUNNEL_NAME])
+        self._native_wg_active = False
 
     def _detect_auto_mtu(self, proto: str) -> int:
         overhead = 80 if proto.upper() == "WIREGUARD" else 60
@@ -575,6 +660,16 @@ class EcholicenseApi:
         if self._state.get("killSwitch"):
             self._apply_killswitch_rules(srv["host"])
 
+        # اجرای WireGuard روی درایور کرنل بومی برای پینگ واقعی ICMP در CMD (بدون <1ms فیک)
+        if mode == "tun" and srv.get("protocol", "").upper() == "WIREGUARD":
+            if self._start_native_wg(srv, dns_addr, mtu):
+                self._set_windows_proxy(False)
+                self._connected_at = time.time()
+                self._state["connectionState"] = "CONNECTED"
+                self._state["statusMessage"] = f"Connected • WireGuard Kernel TUN (Real Ping) • MTU {mtu}"
+                self._save_state()
+                return self.get_state()
+
         last_err = "Core failed to start (run as Admin for TUN)"
         started = False
 
@@ -591,6 +686,7 @@ class EcholicenseApi:
                 split_apps=self._state.get("splitApps", []),
                 socks_port=self._active_port,
                 tun_stack=stack,
+                app_dir=str(get_app_dir()),
             )
             cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
@@ -651,6 +747,7 @@ class EcholicenseApi:
         return self.get_state()
 
     def disconnect(self, keep_killswitch: bool = False) -> dict:
+        self._stop_native_wg()
         if self._proc:
             try:
                 self._proc.terminate()

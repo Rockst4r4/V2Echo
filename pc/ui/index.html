@@ -232,6 +232,15 @@ input[type="text"], input[type="number"], textarea {
   <label class="switch red"><input type="checkbox" id="ksToggle" onchange="toggleKillSwitch(this.checked)"><span class="slider"></span></label>
 </div>
 
+<!-- Bypass Iran directly on Main Screen -->
+<div class="glass card row" style="border-color:rgba(0,229,163,0.42)">
+  <div>
+    <div style="font-size:13px;font-weight:700">🇮🇷 Bypass Iran</div>
+    <div style="font-size:11px;color:var(--muted)">Direct routing for Iranian sites, banks & IPs</div>
+  </div>
+  <label class="switch"><input type="checkbox" id="iranToggle" onchange="toggleIranMain(this.checked)"><span class="slider"></span></label>
+</div>
+
 <!-- Graphical Split Tunneling quick card -->
 <div class="glass card row click" onclick="openSplitModal()">
   <div>
@@ -407,6 +416,7 @@ function render(st) {
     : 'Add subscription or WireGuard';
 
   document.getElementById('ksToggle').checked = !!st.killSwitch;
+  document.getElementById('iranToggle').checked = !!st.iranSplit;
   document.getElementById('splitSummary').textContent =
     `${st.iranSplit ? 'Iran bypass ON' : 'Iran bypass OFF'} • ${(st.splitApps || []).length} apps (${st.splitMode})`;
 
@@ -488,6 +498,7 @@ async function setMode(m) { render(await pywebview.api.set_mode(m)); }
 async function toggleAiPro() { render(await pywebview.api.toggle_ai_pro()); }
 async function toggleGaming() { render(await pywebview.api.toggle_gaming()); }
 async function toggleKillSwitch(v) { render(await pywebview.api.toggle_killswitch(v)); }
+async function toggleIranMain(v) { render(await pywebview.api.update_settings({ iranSplit: v })); }
 async function pingAll() { render(await pywebview.api.ping_all()); }
 async function refreshSub() { render(await pywebview.api.refresh_subscription()); }
 async function selectSrv(id) { closeModal('serversModal'); render(await pywebview.api.select_server(id)); }

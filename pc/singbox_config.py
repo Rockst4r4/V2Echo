@@ -1,6 +1,8 @@
 import base64
 import json
+import os
 import re
+from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
 IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
@@ -17,6 +19,29 @@ AD_DOMAIN_SUFFIXES = [
     "admob.com",
     "unityads.unity3d.com",
     "applovin.com",
+]
+
+IRAN_EXTRA_SUFFIXES = [
+    ".ir",
+    "digikala.com",
+    "aparat.com",
+    "filimo.com",
+    "namava.ir",
+    "telewebion.com",
+    "varzesh3.com",
+    "torob.com",
+    "divar.ir",
+    "snapp.ir",
+    "tapsi.ir",
+    "cafebazaar.ir",
+    "myket.ir",
+    "blubank.com",
+    "shaparak.ir",
+    "nobitex.ir",
+    "shecan.ir",
+    "rubika.ir",
+    "eitaa.com",
+    "bale.ai",
 ]
 
 
@@ -230,6 +255,7 @@ def build_singbox_config(
     split_apps: list[str],
     socks_port: int = 10808,
     tun_stack: str = "system",
+    app_dir: str | None = None,
 ) -> dict:
     proxy_out = build_outbound(profile, mtu, mux_cfg)
     dns_remote = (dns_server or "").strip()
@@ -244,9 +270,21 @@ def build_singbox_config(
     if not IPV4_RE.match(dns_remote):
         remote_dns_entry["address_resolver"] = "local"
 
+    base_dir = Path(app_dir) if app_dir else Path(".")
+    geoip_ir = base_dir / "geoip-ir.srs"
+    geosite_ir = base_dir / "geosite-ir.srs"
+    rule_sets = []
+    if iran_split and geoip_ir.exists() and geoip_ir.stat().st_size > 100:
+        rule_sets.append({"tag": "geoip-ir", "type": "local", "format": "binary", "path": str(geoip_ir)})
+    if iran_split and geosite_ir.exists() and geosite_ir.stat().st_size > 100:
+        rule_sets.append({"tag": "geosite-ir", "type": "local", "format": "binary", "path": str(geosite_ir)})
+    rs_tags = [r["tag"] for r in rule_sets]
+
     dns_rules = [{"outbound": "any", "server": "local"}]
     if iran_split:
-        dns_rules.append({"domain_suffix": [".ir"], "server": "local"})
+        dns_rules.append({"domain_suffix": IRAN_EXTRA_SUFFIXES, "server": "local"})
+        if "geosite-ir" in rs_tags:
+            dns_rules.append({"rule_set": ["geosite-ir"], "server": "local"})
     if adblock:
         dns_rules.append({"domain_suffix": AD_DOMAIN_SUFFIXES, "server": "block"})
 
@@ -284,7 +322,9 @@ def build_singbox_config(
         route_rules.append({"domain_suffix": AD_DOMAIN_SUFFIXES, "outbound": "block"})
 
     if iran_split:
-        route_rules.append({"domain_suffix": [".ir"], "outbound": "direct"})
+        route_rules.append({"domain_suffix": IRAN_EXTRA_SUFFIXES, "outbound": "direct"})
+        if rs_tags:
+            route_rules.append({"rule_set": rs_tags, "outbound": "direct"})
 
     clean_apps = [a.strip() for a in (split_apps or []) if a.strip()]
     final_outbound = "proxy"
@@ -295,6 +335,14 @@ def build_singbox_config(
             final_outbound = "direct"
         else:
             route_rules.append({"process_name": clean_apps, "outbound": "direct"})
+
+    route_obj = {
+        "auto_detect_interface": True,
+        "rules": route_rules,
+        "final": final_outbound,
+    }
+    if rule_sets:
+        route_obj["rule_set"] = rule_sets
 
     return {
         "log": {"level": "warn", "timestamp": True},
@@ -314,9 +362,5 @@ def build_singbox_config(
             {"type": "block", "tag": "block"},
             {"type": "dns", "tag": "dns-out"},
         ],
-        "route": {
-            "auto_detect_interface": True,
-            "rules": route_rules,
-            "final": final_outbound,
-        },
+        "route": route_obj,
     }
