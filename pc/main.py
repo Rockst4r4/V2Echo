@@ -31,7 +31,9 @@ APP_NAME = "EcholicenseVPN"
 APP_VERSION = "1.0.0"
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
-
+STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+PROXY_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+KILLSWITCH_PREFIX = "EcholicenseKillSwitch"
 ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 
@@ -48,10 +50,6 @@ def find_free_port(preferred: int = 10808) -> int:
             except OSError:
                 continue
     return preferred
-
-STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
-PROXY_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-KILLSWITCH_PREFIX = "EcholicenseKillSwitch"
 
 
 def get_app_dir() -> Path:
@@ -272,9 +270,9 @@ class EcholicenseApi:
     def __init__(self):
         self._data_dir = get_data_dir()
         self._state_file = self._data_dir / "state.json"
+        self._log_file = self._data_dir / "core.log"
         self._proc: subprocess.Popen | None = None
         self._log_fh = None
-        self._log_file = self._data_dir / 'core.log'
         self._active_port = SOCKS_PORT
         self._connected_at = 0.0
         self._last_net = psutil.net_io_counters()
@@ -293,7 +291,7 @@ class EcholicenseApi:
     def _default_state(self) -> dict:
         return {
             "language": "en",
-            "mode": "tun",            # "tun" or "proxy"
+            "mode": "tun",
             "connectionState": "DISCONNECTED",
             "statusMessage": "Ready to connect",
             "subscriptions": [],
@@ -313,7 +311,7 @@ class EcholicenseApi:
             "manualDns": "",
             "activeDns": "Auto Failover",
             "mux": {"enabled": False, "concurrency": 8, "xudp": 16},
-            "splitMode": "bypass",    # "bypass" or "only"
+            "splitMode": "bypass",
             "splitApps": [],
             "announcement": None,
             "dismissedAnnouncementId": 0,
@@ -346,12 +344,11 @@ class EcholicenseApi:
     def _run_hidden(self, args: list[str]) -> int:
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         try:
-            r = subprocess.run(args, capture_output=True, text=True, creationflags=flags, timeout=10)
+            r = subprocess.run(args, capture_output=True, text=True, creationflags=flags, timeout=5)
             return r.returncode
         except Exception:
             return 1
 
-    # -------------------- Windows System Proxy & Startup & KillSwitch --------------------
     def _set_windows_proxy(self, enabled: bool):
         if not winreg:
             return
@@ -383,7 +380,7 @@ class EcholicenseApi:
     def _clear_killswitch_rules(self):
         if os.name != "nt":
             return
-        for suffix in ("AllowLoopback", "AllowServer", "AllowLan", "BlockLeak"):
+        for suffix in ("AllowLoopback", "AllowServer", "AllowLan", "AllowCore", "BlockLeak"):
             self._run_hidden(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={KILLSWITCH_PREFIX}_{suffix}"])
 
     def _apply_killswitch_rules(self, server_host: str):
@@ -410,10 +407,10 @@ class EcholicenseApi:
         def _probe(payload: int) -> int:
             try:
                 r = subprocess.run(
-                    ["ping", "-n", "1", "-f", "-l", str(payload), "-w", "500", "1.1.1.1"],
+                    ["ping", "-n", "1", "-f", "-l", str(payload), "-w", "450", "1.1.1.1"],
                     capture_output=True,
                     creationflags=flags,
-                    timeout=1.1,
+                    timeout=0.9,
                 )
                 return payload if r.returncode == 0 else 0
             except Exception:
@@ -511,7 +508,6 @@ class EcholicenseApi:
         self.disconnect()
         self._clear_killswitch_rules()
 
-    # -------------------- Public JS Bridge API --------------------
     def get_state(self) -> dict:
         now = time.time()
         net = psutil.net_io_counters()
@@ -605,9 +601,9 @@ class EcholicenseApi:
                     pass
                 self._log_fh = None
 
-            self._log_fh = open(self._log_file, "w", encoding="utf-8", errors="replace")
             env = dict(os.environ)
             env["NO_COLOR"] = "1"
+            self._log_fh = open(self._log_file, "w", encoding="utf-8", errors="replace")
             self._proc = subprocess.Popen(
                 [str(singbox_bin), "run", "-c", str(cfg_path)],
                 cwd=str(get_app_dir()),
@@ -616,7 +612,7 @@ class EcholicenseApi:
                 creationflags=flags,
                 env=env,
             )
-            time.sleep(1.2)
+            time.sleep(1.1)
             if self._proc.poll() is None:
                 started = True
                 break
@@ -629,28 +625,27 @@ class EcholicenseApi:
             self._log_fh = None
             self._proc = None
 
-            raw_log = ""
             try:
                 raw_log = strip_ansi(self._log_file.read_text(encoding="utf-8", errors="ignore"))
+                lines = [ln.strip() for ln in raw_log.splitlines() if ln.strip()]
+                if lines:
+                    last_err = lines[-1]
             except Exception:
                 pass
-            lines = [ln.strip() for ln in raw_log.splitlines() if ln.strip()]
-            if lines:
-                last_err = lines[-1]
 
         if not started:
             self._state["connectionState"] = "ERROR"
             self._state["statusMessage"] = last_err
             return self.get_state()
 
-        if self._state.get("mode") == "proxy":
+        if mode == "proxy":
             self._set_windows_proxy(True)
         else:
             self._set_windows_proxy(False)
 
         self._connected_at = time.time()
         self._state["connectionState"] = "CONNECTED"
-        mode_lbl = "TUN (Real Ping)" if self._state.get("mode") == "tun" else "System Proxy"
+        mode_lbl = "TUN (Real Ping)" if mode == "tun" else "System Proxy"
         self._state["statusMessage"] = f"Connected • {mode_lbl} • MTU {mtu}"
         self._save_state()
         return self.get_state()
