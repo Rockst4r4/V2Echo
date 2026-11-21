@@ -137,7 +137,7 @@ class EcholicenseVpnService : VpnService() {
                 )
 
                 VpnStateManager.setConnected()
-                scope.launch { delay(1800); runCatching { AnnouncementWorker.fetchAndProcess(this@EcholicenseVpnService) } }
+                scope.launch { delay(1500); while (isActive) { runCatching { AnnouncementWorker.fetchAndProcess(this@EcholicenseVpnService) }; delay(30_000) } }
                 runCatching {
                     TileService.requestListeningState(
                         this@EcholicenseVpnService,

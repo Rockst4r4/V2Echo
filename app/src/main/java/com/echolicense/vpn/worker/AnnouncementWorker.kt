@@ -119,12 +119,13 @@ class AnnouncementWorker(
         }
 
         private fun fetchRawJson(): String? {
-            val cacheBuster = System.currentTimeMillis() / 30000L
+            val cacheBuster = System.currentTimeMillis()
             for (baseUrl in ENDPOINTS) {
                 val res = runCatching {
                     val req = Request.Builder()
                         .url("$baseUrl?t=$cacheBuster")
-                        .header("Cache-Control", "no-cache")
+                        .header("Cache-Control", "no-cache, no-store")
+                        .header("Pragma", "no-cache")
                         .build()
                     httpClient.newCall(req).execute().use { resp ->
                         if (resp.isSuccessful) resp.body?.string()?.trim() else null

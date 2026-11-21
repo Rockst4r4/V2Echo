@@ -38,7 +38,7 @@ except ImportError:
     winreg = None
 
 APP_NAME = "EcholicenseVPN"
-APP_VERSION = "1.6"
+APP_VERSION = "1.7"
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -585,9 +585,9 @@ class EcholicenseApi:
         last_sub_sync = time.time()
         last_notif_sync = time.time()
         while True:
-            time.sleep(30)
+            time.sleep(5)
             now = time.time()
-            if now - last_notif_sync >= 300:
+            if now - last_notif_sync >= 20:
                 last_notif_sync = now
                 self._fetch_announcement()
             if now - last_sub_sync >= 12 * 3600:
@@ -609,7 +609,6 @@ class EcholicenseApi:
         if self._tray is not None:
             try:
                 self._tray.notify((message or "New notification")[:250], (title or "Echolicense VPN")[:63])
-                return
             except Exception:
                 pass
         def _worker():
@@ -642,32 +641,43 @@ class EcholicenseApi:
         threading.Thread(target=_worker, daemon=True).start()
 
     def _fetch_announcement(self):
+        ts = int(time.time())
         endpoints = (
-            ANNOUNCEMENT_URL,
-            "https://cdn.jsdelivr.net/gh/Rockst4r4/V2Echo@main/announcements.json",
+            f"{ANNOUNCEMENT_URL}?nocache={ts}",
+            f"https://cdn.jsdelivr.net/gh/Rockst4r4/V2Echo@main/announcements.json?nocache={ts}",
         )
-        proxies = None
+        proxy_attempts = []
         if self._state.get("connectionState") == "CONNECTED" and not getattr(self, "_native_wg_active", False):
             proxy_url = f"http://127.0.0.1:{self._active_port}"
-            proxies = {"http": proxy_url, "https": proxy_url}
+            proxy_attempts.append({"http": proxy_url, "https": proxy_url})
+        proxy_attempts.append(None)
 
         data = None
-        ts = int(time.time() // 30)
+        last_err = ""
         for url in endpoints:
-            try:
-                r = requests.get(
-                    f"{url}?t={ts}",
-                    proxies=proxies,
-                    timeout=7,
-                    headers={"Cache-Control": "no-cache"},
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    break
-            except Exception:
-                continue
+            for proxies in proxy_attempts:
+                try:
+                    r = requests.get(
+                        url,
+                        proxies=proxies,
+                        timeout=6,
+                        headers={"Cache-Control": "no-cache, no-store", "Pragma": "no-cache"},
+                    )
+                    if r.status_code == 200:
+                        parsed = r.json()
+                        if isinstance(parsed, dict):
+                            data = parsed
+                            break
+                    else:
+                        last_err = f"HTTP {r.status_code}"
+                except Exception as ex:
+                    last_err = str(ex)
+            if data is not None:
+                break
 
         if not isinstance(data, dict):
+            if hasattr(self, "_append_log"):
+                self._append_log(f"[NOTIF] Fetch failed: {last_err}")
             return
 
         self._state["botUsername"] = data.get("bot_username") or "echopress_bot"
@@ -696,7 +706,10 @@ class EcholicenseApi:
         if active and push_enabled and aid > last_notified and title:
             self._state["lastNotifiedId"] = aid
             self._save_state()
+            if hasattr(self, "_append_log"):
+                self._append_log(f"[NOTIF] Triggered ID #{aid}: {title}")
             self._show_windows_toast(title, msg)
+
 
     def _get_active_sub(self):
         sid = self._state.get("activeSubId")
@@ -1284,7 +1297,7 @@ def main():
     api = EcholicenseApi()
     index_html = str(get_resource_dir() / "ui" / "index.html")
     win = webview.create_window(
-        title="Echolicense VPN v1.6",
+        title="Echolicense VPN v1.7",
         url=index_html,
         js_api=api,
         width=445,
