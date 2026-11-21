@@ -155,9 +155,95 @@ input[type="text"], input[type="number"], textarea {
 .ping-dot.bad { background: var(--gaming); box-shadow: 0 0 10px var(--gaming); }
 .sparkline { display: flex; align-items: flex-end; gap: 3px; height: 22px; }
 .spark-bar { width: 5px; border-radius: 3px; background: rgba(255,255,255,0.16); transition: height 0.25s ease, background 0.25s ease; }
+
+html {
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  min-height: 100vh;
+}
+body {
+  padding: 0 16px 16px 16px !important;
+  overflow-x: hidden;
+}
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(34, 228, 255, 0.35); }
+
+.win-titlebar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  direction: ltr;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  margin: 0 -16px 10px -16px;
+  padding: 0 6px 0 14px;
+  background: rgba(10, 16, 22, 0.42);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.win-drag {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: rgba(248, 250, 252, 0.65);
+  cursor: move;
+}
+.win-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+}
+body.connected .win-dot {
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+}
+.win-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.win-btn {
+  width: 32px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(248, 250, 252, 0.78);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.win-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.win-btn.close:hover { background: rgba(255, 90, 110, 0.85); color: #fff; }
+
 </style>
 </head>
 <body>
+
+<div class="win-titlebar">
+  <div class="win-drag pywebview-drag-region">
+    <span class="win-dot"></span>
+    <span>ECHOLICENSE VPN • v1.5</span>
+  </div>
+  <div class="win-controls">
+    <button class="win-btn" onclick="minimizeWin()" title="Minimize">&#8211;</button>
+    <button class="win-btn close" onclick="closeWin()" title="Hide to Tray">&#10005;</button>
+  </div>
+</div>
+
 
 <div class="topbar">
   <div class="brand">
@@ -168,7 +254,7 @@ input[type="text"], input[type="number"], textarea {
       <polygon points="61,21 39,55 52,55 44,85 67,48 54,48" fill="#0A1016" stroke="#7CFF4F" stroke-width="6" stroke-linejoin="round"/>
     </svg>
     <div>
-      <h1>Echolicense <span style="font-size:10px;color:var(--cyan)">v1.4</span></h1>
+      <h1>Echolicense <span style="font-size:10px;color:var(--cyan)">v1.5</span></h1>
       <div class="sub click" id="statusMsg" title="Click to view core logs" onclick="openLogsModal()">Ready to connect</div>
     </div>
   </div>
@@ -653,6 +739,10 @@ window.addEventListener('pywebviewready', async () => {
   render(await pywebview.api.get_state());
   setInterval(async () => { render(await pywebview.api.get_state()); }, 1500);
 });
+
+function minimizeWin() { if (window.pywebview) pywebview.api.minimize_window(); }
+function closeWin() { if (window.pywebview) pywebview.api.close_window(); }
+
 </script>
 </body>
 </html>

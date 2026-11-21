@@ -36,7 +36,7 @@ except ImportError:
     winreg = None
 
 APP_NAME = "EcholicenseVPN"
-APP_VERSION = "1.4"
+APP_VERSION = "1.5"
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -1261,6 +1261,22 @@ class EcholicenseApi:
         except Exception:
             self._tray = None
 
+    def minimize_window(self):
+        if self._window is not None:
+            try:
+                self._window.minimize()
+            except Exception:
+                pass
+
+    def close_window(self):
+        if self._tray is not None and self._window is not None:
+            try:
+                self._window.hide()
+                return
+            except Exception:
+                pass
+        threading.Thread(target=self.quit_app, daemon=True).start()
+
     def open_url(self, url: str):
         webbrowser.open(url)
 
@@ -1269,12 +1285,14 @@ def main():
     api = EcholicenseApi()
     index_html = str(get_resource_dir() / "ui" / "index.html")
     win = webview.create_window(
-        title="Echolicense VPN v1.4",
+        title="Echolicense VPN v1.5",
         url=index_html,
         js_api=api,
-        width=460,
-        height=810,
-        min_size=(410, 680),
+        width=445,
+        height=780,
+        resizable=False,
+        frameless=True,
+        easy_drag=False,
         background_color="#0A1016",
     )
     api._window = win
