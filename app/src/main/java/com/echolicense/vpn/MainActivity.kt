@@ -27,6 +27,10 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val KEY_MTU = "custom_mtu"
+    }
+
     private val repo = SubscriptionRepository()
 
     private val vpnPermissionLauncher = registerForActivityResult(
@@ -49,9 +53,11 @@ class MainActivity : ComponentActivity() {
             notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // بارگذاری خودکار آخرین اشتراک ذخیره‌شده هنگام باز کردن برنامه
-        val savedSub = getSharedPreferences(TrafficAlertWorker.PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(TrafficAlertWorker.KEY_SUB_URL, null)
+        val prefs = getSharedPreferences(TrafficAlertWorker.PREFS_NAME, Context.MODE_PRIVATE)
+        val savedMtu = prefs.getInt(KEY_MTU, 1400).coerceIn(1200, 1500)
+        VpnStateManager.update { it.copy(mtu = savedMtu) }
+
+        val savedSub = prefs.getString(TrafficAlertWorker.KEY_SUB_URL, null)
         if (!savedSub.isNullOrBlank() && VpnStateManager.state.value.servers.isEmpty()) {
             handleImport(savedSub)
         }
@@ -65,15 +71,66 @@ class MainActivity : ComponentActivity() {
                     onPowerClick = { handlePowerToggle() },
                     onImportInput = { handleImport(it) },
                     onSelectServer = { srv ->
+                        val wasConnected = VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED
                         VpnStateManager.update { it.copy(activeServer = srv) }
+                        if (wasConnected) {
+                            dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
+                        }
                     },
                     onSmartPingClick = { runSmartPing() },
                     onToggleIranSplit = { enabled ->
                         VpnStateManager.update { it.copy(iranSplitEnabled = enabled) }
                     },
-                    onToggleFragment = { enabled ->
-                        VpnStateManager.update { it.copy(fragmentEnabled = enabled) }
+                    onToggleAiPro = { handleToggleAiPro() },
+                    onChangeMtu = { newMtu ->
+                        val clamped = newMtu.coerceIn(1200, 1500)
+                        prefs.edit().putInt(KEY_MTU, clamped).apply()
+                        VpnStateManager.update { it.copy(mtu = clamped) }
+                    },
+                    onApplyMtuReconnect = {
+                        if (VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
+                            dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
+                        }
                     }
+                )
+            }
+        }
+    }
+
+    private fun handleToggleAiPro() {
+        val current = VpnStateManager.state.value
+        val nextEnabled = !current.aiProOnly
+
+        if (nextEnabled) {
+            val aiServers = current.servers.filter { it.isAiPro() }
+            if (aiServers.isEmpty()) {
+                VpnStateManager.update {
+                    it.copy(
+                        aiProOnly = false,
+                        statusMessage = "سرور AI Pro در اشتراک شما یافت نشد"
+                    )
+                }
+                return
+            }
+            val bestAi = aiServers.first()
+            val isConnected = current.connectionState == ConnectionState.CONNECTED
+            VpnStateManager.update {
+                it.copy(
+                    aiProOnly = true,
+                    activeServer = bestAi,
+                    statusMessage = "حالت AI Pro فعال شد (${bestAi.name})"
+                )
+            }
+            if (isConnected) {
+                dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
+            } else {
+                startVpnWithPermission()
+            }
+        } else {
+            VpnStateManager.update {
+                it.copy(
+                    aiProOnly = false,
+                    statusMessage = "حالت عادی (تمام سرورها)"
                 )
             }
         }
@@ -88,11 +145,26 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        if (state.activeServer == null) {
+        if (state.aiProOnly) {
+            val bestAi = state.servers.firstOrNull { it.isAiPro() }
+            if (bestAi == null) {
+                VpnStateManager.update { it.copy(statusMessage = "سرور AI Pro در اشتراک یافت نشد") }
+                return
+            }
+            if (state.activeServer?.isAiPro() != true) {
+                VpnStateManager.update { it.copy(activeServer = bestAi) }
+            }
+        }
+
+        if (VpnStateManager.state.value.activeServer == null) {
             VpnStateManager.update { it.copy(statusMessage = "ابتدا لینک اشتراک یا کانفیگ اضافه کنید") }
             return
         }
 
+        startVpnWithPermission()
+    }
+
+    private fun startVpnWithPermission() {
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent != null) {
             vpnPermissionLauncher.launch(prepareIntent)
@@ -113,11 +185,16 @@ class MainActivity : ComponentActivity() {
                 if (input.startsWith("http://", true) || input.startsWith("https://", true)) {
                     val (subInfo, servers) = repo.fetchSubscription(input)
                     val sorted = repo.pingAllServers(servers)
-                    VpnStateManager.update {
-                        it.copy(
+                    VpnStateManager.update { state ->
+                        val preferred = if (state.aiProOnly) {
+                            sorted.firstOrNull { it.isAiPro() }
+                        } else {
+                            sorted.firstOrNull()
+                        }
+                        state.copy(
                             subscriptionInfo = subInfo,
                             servers = sorted,
-                            activeServer = sorted.firstOrNull(),
+                            activeServer = preferred,
                             statusMessage = "${sorted.size} سرور آماده اتصال"
                         )
                     }
@@ -146,8 +223,13 @@ class MainActivity : ComponentActivity() {
             val current = VpnStateManager.state.value.servers
             if (current.isEmpty()) return@launch
             val sorted = repo.pingAllServers(current)
-            VpnStateManager.update {
-                it.copy(servers = sorted, activeServer = sorted.firstOrNull())
+            VpnStateManager.update { state ->
+                val preferred = if (state.aiProOnly) {
+                    sorted.firstOrNull { it.isAiPro() }
+                } else {
+                    sorted.firstOrNull()
+                }
+                state.copy(servers = sorted, activeServer = preferred)
             }
         }
     }

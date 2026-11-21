@@ -15,7 +15,8 @@ data class VpnUiState(
     val subscriptionInfo: SubscriptionInfo = SubscriptionInfo(),
     val activeDns: DnsProvider? = null,
     val iranSplitEnabled: Boolean = true,
-    val fragmentEnabled: Boolean = false,
+    val aiProOnly: Boolean = false,
+    val mtu: Int = 1400,
     val downloadSpeedKbps: Long = 0L,
     val uploadSpeedKbps: Long = 0L,
     val connectedSeconds: Long = 0L,
@@ -31,7 +32,7 @@ object VpnStateManager {
     }
 
     fun setConnected() = update {
-        it.copy(connectionState = ConnectionState.CONNECTED, statusMessage = "متصل و ایمن")
+        it.copy(connectionState = ConnectionState.CONNECTED, statusMessage = "متصل و ایمن (TUN)")
     }
 
     fun setDisconnected() = update {

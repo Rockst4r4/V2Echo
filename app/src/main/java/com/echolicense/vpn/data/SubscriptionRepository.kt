@@ -246,13 +246,8 @@ class SubscriptionRepository {
         withContext(Dispatchers.IO) {
             servers.map { srv ->
                 async {
-                    val ms = if (srv.protocol == VpnProtocol.WIREGUARD) {
-                        // پورت UDP وایرگارد به TCP پاسخ نمی‌دهد؛ برای جلوگیری از خطا پینگ 1ms نمایش داده نمی‌شود
-                        measureTcpPing(srv.host, srv.port, 900)
-                    } else {
-                        measureTcpPing(srv.host, srv.port, 1800)
-                    }
-                    srv.copy(pingMs = ms)
+                    val timeout = if (srv.protocol == VpnProtocol.WIREGUARD) 900 else 1800
+                    srv.copy(pingMs = measureTcpPing(srv.host, srv.port, timeout))
                 }
             }.awaitAll().sortedBy { if (it.pingMs < 0) Int.MAX_VALUE else it.pingMs }
         }

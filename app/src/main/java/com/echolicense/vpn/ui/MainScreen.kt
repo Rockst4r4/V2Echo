@@ -8,8 +8,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -30,6 +32,8 @@ import com.echolicense.vpn.data.ServerProfile
 import com.echolicense.vpn.ui.theme.*
 import java.util.Locale
 
+private val AiProAccent = Color(0xFFA855F7)
+
 @Composable
 fun MainScreen(
     uiState: VpnUiState,
@@ -38,15 +42,22 @@ fun MainScreen(
     onSelectServer: (ServerProfile) -> Unit,
     onSmartPingClick: () -> Unit,
     onToggleIranSplit: (Boolean) -> Unit,
-    onToggleFragment: (Boolean) -> Unit
+    onToggleAiPro: () -> Unit,
+    onChangeMtu: (Int) -> Unit,
+    onApplyMtuReconnect: () -> Unit
 ) {
     var showImportDialog by remember { mutableStateOf(false) }
     var showServerSheet by remember { mutableStateOf(false) }
+
+    val visibleServers = remember(uiState.servers, uiState.aiProOnly) {
+        if (uiState.aiProOnly) uiState.servers.filter { it.isAiPro() } else uiState.servers
+    }
 
     LiquidAmbientBackground(state = uiState.connectionState) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 14.dp),
@@ -95,7 +106,7 @@ fun MainScreen(
                 }
             }
 
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(22.dp))
 
             ExpressGlassPowerButton(
                 state = uiState.connectionState,
@@ -103,7 +114,15 @@ fun MainScreen(
                 onClick = onPowerClick
             )
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
+
+            AiProModeCard(
+                enabled = uiState.aiProOnly,
+                aiServersCount = uiState.servers.count { it.isAiPro() },
+                onClick = onToggleAiPro
+            )
+
+            Spacer(Modifier.height(12.dp))
 
             LiquidGlassCard(
                 modifier = Modifier
@@ -113,19 +132,23 @@ fun MainScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 16.dp),
+                        .padding(horizontal = 18.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(38.dp)
                                 .clip(CircleShape)
                                 .background(Color.White.copy(alpha = 0.12f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Rounded.Public, null, tint = CyanLiquid)
+                            Icon(
+                                imageVector = if (uiState.aiProOnly) Icons.Rounded.AutoAwesome else Icons.Rounded.Public,
+                                contentDescription = null,
+                                tint = if (uiState.aiProOnly) AiProAccent else CyanLiquid
+                            )
                         }
                         Spacer(Modifier.width(12.dp))
                         Column {
@@ -140,7 +163,7 @@ fun MainScreen(
                             val proto = uiState.activeServer?.protocol?.name ?: "لینک ساب یا WireGuard اضافه کنید"
                             val pingTxt = uiState.activeServer?.pingMs?.takeIf { it > 0 }?.let { " • ${it}ms" } ?: ""
                             Text(
-                                text = "$proto$pingTxt",
+                                text = "$proto • Full TUN$pingTxt",
                                 color = Color.White.copy(alpha = 0.65f),
                                 fontSize = 12.sp
                             )
@@ -150,9 +173,9 @@ fun MainScreen(
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
             TrafficQuotaCard(uiState)
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -195,37 +218,35 @@ fun MainScreen(
                 }
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
+
+            MtuControlCard(
+                mtu = uiState.mtu,
+                isConnected = uiState.connectionState == ConnectionState.CONNECTED,
+                onChangeMtu = onChangeMtu,
+                onApplyReconnect = onApplyMtuReconnect
+            )
+
+            Spacer(Modifier.height(12.dp))
 
             LiquidGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("بایپس خودکار اپ‌ها و سایت‌های ایران", color = Color.White, fontSize = 13.sp)
-                        Switch(
-                            checked = uiState.iranSplitEnabled,
-                            onCheckedChange = onToggleIranSplit,
-                            colors = SwitchDefaults.colors(checkedTrackColor = EmeraldGlow)
-                        )
-                    }
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("حالت ضد اختلال (TLS Fragment)", color = Color.White, fontSize = 13.sp)
-                        Switch(
-                            checked = uiState.fragmentEnabled,
-                            onCheckedChange = onToggleFragment,
-                            colors = SwitchDefaults.colors(checkedTrackColor = CyanLiquid)
-                        )
-                    }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("بایپس خودکار اپ‌ها و سایت‌های ایران", color = Color.White, fontSize = 13.sp)
+                    Switch(
+                        checked = uiState.iranSplitEnabled,
+                        onCheckedChange = onToggleIranSplit,
+                        colors = SwitchDefaults.colors(checkedTrackColor = EmeraldGlow)
+                    )
                 }
             }
+
+            Spacer(Modifier.height(14.dp))
         }
     }
 
@@ -241,7 +262,8 @@ fun MainScreen(
 
     if (showServerSheet) {
         ServerPickerDialog(
-            servers = uiState.servers,
+            title = if (uiState.aiProOnly) "سرورهای AI Pro" else "انتخاب سرور",
+            servers = visibleServers,
             activeId = uiState.activeServer?.id,
             onSelect = {
                 onSelectServer(it)
@@ -250,6 +272,186 @@ fun MainScreen(
             onSmartPing = onSmartPingClick,
             onDismiss = { showServerSheet = false }
         )
+    }
+}
+
+@Composable
+private fun AiProModeCard(
+    enabled: Boolean,
+    aiServersCount: Int,
+    onClick: () -> Unit
+) {
+    val borderColor by animateColorAsState(
+        targetValue = if (enabled) AiProAccent else GlassBorderTop,
+        animationSpec = tween(350),
+        label = "aiBorder"
+    )
+    LiquidGlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        cornerRadius = 22.dp,
+        highlightColor = borderColor
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    if (enabled) {
+                        Brush.horizontalGradient(
+                            listOf(AiProAccent.copy(alpha = 0.28f), CyanLiquid.copy(alpha = 0.14f))
+                        )
+                    } else {
+                        Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
+                    }
+                )
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (enabled) AiProAccent.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = "AI Pro",
+                        tint = if (enabled) Color.White else AiProAccent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "حالت اختصاصی AI Pro",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = if (enabled) {
+                            "متصل انحصاری به سرورهای AI Pro ($aiServersCount سرور)"
+                        } else {
+                            "اتصال سریع فقط به سرورهای هوش مصنوعی ($aiServersCount سرور)"
+                        },
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (enabled) AiProAccent else Color.White.copy(alpha = 0.14f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (enabled) "فعال" else "خاموش",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MtuControlCard(
+    mtu: Int,
+    isConnected: Boolean,
+    onChangeMtu: (Int) -> Unit,
+    onApplyReconnect: () -> Unit
+) {
+    val presets = listOf(1280, 1360, 1420, 1500)
+    LiquidGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Tune, null, tint = CyanLiquid, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("تنظیم MTU تونل", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { onChangeMtu((mtu - 20).coerceAtLeast(1200)) },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(Icons.Rounded.Remove, "کاهش MTU", tint = Color.White)
+                    }
+                    Text(
+                        text = "$mtu",
+                        color = EmeraldGlow,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                    IconButton(
+                        onClick = { onChangeMtu((mtu + 20).coerceAtMost(1500)) },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(Icons.Rounded.Add, "افزایش MTU", tint = Color.White)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                presets.forEach { preset ->
+                    val selected = mtu == preset
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (selected) CyanLiquid.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.08f))
+                            .border(
+                                width = 1.dp,
+                                color = if (selected) CyanLiquid else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onChangeMtu(preset) }
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "$preset",
+                            color = if (selected) Color.White else Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+
+                if (isConnected) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(EmeraldGlow.copy(alpha = 0.25f))
+                            .border(1.dp, EmeraldGlow, RoundedCornerShape(12.dp))
+                            .clickable(onClick = onApplyReconnect)
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("اعمال", color = EmeraldGlow, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -281,7 +483,7 @@ private fun ExpressGlassPowerButton(
         Box(contentAlignment = Alignment.Center) {
             Box(
                 modifier = Modifier
-                    .size(188.dp)
+                    .size(176.dp)
                     .scale(if (state == ConnectionState.DISCONNECTED) 1f else pulseScale)
                     .clip(CircleShape)
                     .background(ringColor.copy(alpha = 0.14f))
@@ -289,7 +491,7 @@ private fun ExpressGlassPowerButton(
             )
             Box(
                 modifier = Modifier
-                    .size(148.dp)
+                    .size(140.dp)
                     .clip(CircleShape)
                     .background(
                         Brush.verticalGradient(
@@ -304,12 +506,12 @@ private fun ExpressGlassPowerButton(
                     imageVector = Icons.Rounded.PowerSettingsNew,
                     contentDescription = "اتصال",
                     tint = if (state == ConnectionState.CONNECTED) EmeraldGlow else Color.White,
-                    modifier = Modifier.size(62.dp)
+                    modifier = Modifier.size(58.dp)
                 )
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
         val timerText = if (state == ConnectionState.CONNECTED) {
             val h = connectedSeconds / 3600
             val m = (connectedSeconds % 3600) / 60
@@ -337,7 +539,7 @@ private fun TrafficQuotaCard(uiState: VpnUiState) {
         cornerRadius = 22.dp,
         highlightColor = borderAccent
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -358,7 +560,7 @@ private fun TrafficQuotaCard(uiState: VpnUiState) {
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             LinearProgressIndicator(
                 progress = { if (sub.totalBytes > 0) (1f - sub.usageProgress) else 0f },
                 modifier = Modifier
@@ -419,6 +621,7 @@ private fun ImportSubscriptionDialog(
 
 @Composable
 private fun ServerPickerDialog(
+    title: String,
     servers: List<ServerProfile>,
     activeId: String?,
     onSelect: (ServerProfile) -> Unit,
@@ -434,7 +637,7 @@ private fun ServerPickerDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("انتخاب سرور", color = Color.White)
+                Text(title, color = Color.White)
                 TextButton(onClick = onSmartPing) {
                     Text("⚡ تست پینگ", color = CyanLiquid)
                 }
@@ -442,7 +645,7 @@ private fun ServerPickerDialog(
         },
         text = {
             if (servers.isEmpty()) {
-                Text("هنوز سروری اضافه نشده است.", color = Color.White.copy(alpha = 0.7f))
+                Text("سروری در این دسته یافت نشد.", color = Color.White.copy(alpha = 0.7f))
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(servers) { srv ->
@@ -459,7 +662,8 @@ private fun ServerPickerDialog(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(srv.name, color = Color.White, fontWeight = FontWeight.Medium)
-                                Text(srv.protocol.name, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                                val tag = if (srv.isAiPro()) "${srv.protocol.name} • AI Pro" else srv.protocol.name
+                                Text(tag, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
                             }
                             if (srv.pingMs > 0) {
                                 Text("${srv.pingMs} ms", color = EmeraldGlow, fontSize = 12.sp)

@@ -23,7 +23,6 @@ object XrayConfigBuilder {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
 
-        // 1. تنظیمات DNS هوشمند با رفع بن‌بست دامنه سرور
         val dnsServers = JSONArray()
         if (profile.host.isNotBlank() && !IPV4_REGEX.matches(profile.host) && !profile.host.contains(":")) {
             dnsServers.put(
@@ -53,16 +52,16 @@ object XrayConfigBuilder {
                 .put("queryStrategy", "UseIPv4")
         )
 
-        // 2. ورودی تماماً TUN برای کل ترافیک دستگاه
         val safeMtu = mtu.coerceIn(1200, 1500)
         val tunInbound = JSONObject()
             .put("tag", "tun")
+            .put("port", 0)
             .put("protocol", "tun")
             .put(
                 "settings",
                 JSONObject()
                     .put("name", "xray0")
-                    .put("MTU", safeMtu)
+                    .put("mtu", safeMtu)
                     .put("userLevel", 8)
             )
             .put(
@@ -74,7 +73,6 @@ object XrayConfigBuilder {
             )
         root.put("inbounds", JSONArray().put(tunInbound))
 
-        // 3. خروجی اصلی (شامل WireGuard بومی، VLESS، VMess، Trojan)
         val outbounds = JSONArray()
         val proxyOutbound = when (profile.protocol) {
             VpnProtocol.WIREGUARD -> buildWireGuardOutbound(profile, safeMtu)
@@ -92,7 +90,6 @@ object XrayConfigBuilder {
         outbounds.put(JSONObject().put("tag", "block").put("protocol", "blackhole"))
         root.put("outbounds", outbounds)
 
-        // 4. قوانین مسیریابی (DNS + Split Tunnel ایران)
         val rules = JSONArray()
         rules.put(
             JSONObject()

@@ -12,7 +12,17 @@ data class ServerProfile(
     val host: String,
     val port: Int,
     val pingMs: Int = -1
-)
+) {
+    fun isAiPro(): Boolean {
+        val lower = name.lowercase()
+        if (lower.contains("ai pro") || lower.contains("aipro") ||
+            lower.contains("ai-pro") || lower.contains("ai_pro")
+        ) {
+            return true
+        }
+        return Regex("""(^|[\s\-_\[\]()|])ai([\s\-_\[\]()|]|$)""").containsMatchIn(lower)
+    }
+}
 
 data class SubscriptionInfo(
     val subUrl: String = "",
