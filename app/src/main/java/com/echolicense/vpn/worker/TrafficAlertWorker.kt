@@ -68,7 +68,7 @@ class TrafficAlertWorker(
         val subUrl = prefs.getString(KEY_SUB_URL, null) ?: return Result.success()
 
         return try {
-            val (info, _) = SubscriptionRepository().fetchSubscription(subUrl)
+            val (info, _) = SubscriptionRepository().fetchSubscription(subUrl, applicationContext)
             VpnStateManager.update { it.copy(subscriptionInfo = info) }
             evaluateAndNotify(applicationContext, info)
             Result.success()

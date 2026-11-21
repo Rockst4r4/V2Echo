@@ -1,5 +1,6 @@
 package com.echolicense.vpn.data
 
+import android.content.Context
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -24,33 +25,40 @@ class SubscriptionRepository {
         .followSslRedirects(true)
         .build()
 
-    suspend fun fetchSubscription(subUrl: String): Pair<SubscriptionInfo, List<ServerProfile>> =
-        withContext(Dispatchers.IO) {
-            val req = Request.Builder()
-                .url(subUrl.trim())
-                .header("User-Agent", "v2rayNG/1.9.15")
-                .header("Accept", "*/*")
-                .build()
+    suspend fun fetchSubscription(
+        subUrl: String,
+        context: Context? = null
+    ): Pair<SubscriptionInfo, List<ServerProfile>> = withContext(Dispatchers.IO) {
+        val reqBuilder = Request.Builder()
+            .url(subUrl.trim())
+            .header("User-Agent", "v2rayNG/1.9.15")
+            .header("Accept", "*/*")
 
-            httpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    throw IllegalStateException("خطای دریافت اشتراک (کد ${resp.code})")
-                }
-
-                val userInfoHeader = extractUserInfoFromResponseChain(resp)
-                val bodyRaw = resp.body?.string()?.trim().orEmpty()
-                val decodedText = tryDecodeBase64(bodyRaw)
-
-                val subInfo = if (userInfoHeader.isNotBlank()) {
-                    parseUserInfoHeader(subUrl, userInfoHeader)
-                } else {
-                    extractUserInfoFromBody(subUrl, decodedText)
-                }
-
-                val profiles = parseServerLines(decodedText)
-                subInfo to profiles
+        if (context != null) {
+            DeviceInfoProvider.getDeviceHeaders(context).forEach { (k, v) ->
+                reqBuilder.header(k, v)
             }
         }
+
+        httpClient.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                throw IllegalStateException("خطای دریافت اشتراک (کد ${resp.code})")
+            }
+
+            val userInfoHeader = extractUserInfoFromResponseChain(resp)
+            val bodyRaw = resp.body?.string()?.trim().orEmpty()
+            val decodedText = tryDecodeBase64(bodyRaw)
+
+            val subInfo = if (userInfoHeader.isNotBlank()) {
+                parseUserInfoHeader(subUrl, userInfoHeader)
+            } else {
+                extractUserInfoFromBody(subUrl, decodedText)
+            }
+
+            val profiles = parseServerLines(decodedText)
+            subInfo to profiles
+        }
+    }
 
     private fun extractUserInfoFromResponseChain(response: Response): String {
         var current: Response? = response

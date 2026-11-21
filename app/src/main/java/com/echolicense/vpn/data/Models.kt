@@ -4,6 +4,14 @@ enum class VpnProtocol { VLESS, VMESS, TROJAN, WIREGUARD }
 
 enum class ConnectionState { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
 
+enum class AppLanguage(val code: String) { FA("fa"), EN("en") }
+
+data class SubscriptionItem(
+    val id: String,
+    val name: String,
+    val url: String
+)
+
 data class ServerProfile(
     val id: String,
     val name: String,

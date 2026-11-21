@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.echolicense.vpn.data.AppLanguage
 import com.echolicense.vpn.data.ConnectionState
 import com.echolicense.vpn.data.IranSplitTunnel
 import kotlinx.coroutines.*
@@ -69,15 +70,18 @@ class EcholicenseVpnService : VpnService() {
     private fun startVpn() {
         val current = VpnStateManager.state.value
         val server = current.activeServer ?: return
-        val mtu = current.mtu.coerceIn(1200, 1500)
+        val isEn = current.language == AppLanguage.EN
 
         createNotificationChannel()
-        startForeground(NOTIF_ID, buildNotification("در حال تنظیم DNS و اتصال..."))
+        startForeground(
+            NOTIF_ID,
+            buildNotification(if (isEn) "Optimizing DNS & MTU..." else "در حال بهینه‌سازی DNS و MTU...")
+        )
 
         VpnStateManager.update {
             it.copy(
                 connectionState = ConnectionState.CONNECTING,
-                statusMessage = if (current.manualDns.isNotBlank()) "اتصال با DNS دستی..." else "در حال تست DNS خودکار..."
+                statusMessage = if (isEn) "Testing DNS & Auto-MTU..." else "در حال تست DNS و MTU خودکار..."
             )
         }
 
@@ -86,10 +90,21 @@ class EcholicenseVpnService : VpnService() {
             try {
                 val hasGeoFiles = ensureGeoAssetsCopied()
                 val resolvedDns = SmartDnsManager.resolveDns(current.manualDns)
+                val finalMtu = if (current.autoMtuEnabled) {
+                    AutoMtuManager.detectOptimalMtu(server.protocol)
+                } else {
+                    current.mtu.coerceIn(1200, 1500)
+                }
+
                 VpnStateManager.update {
                     it.copy(
                         activeDns = resolvedDns,
-                        statusMessage = "اتصال ${server.protocol.name} (MTU $mtu) • DNS ${resolvedDns.name}"
+                        mtu = finalMtu,
+                        statusMessage = if (isEn) {
+                            "Connecting ${server.protocol.name} (MTU $finalMtu) • ${resolvedDns.name}"
+                        } else {
+                            "اتصال ${server.protocol.name} (MTU $finalMtu) • DNS ${resolvedDns.name}"
+                        }
                     )
                 }
 
@@ -97,20 +112,20 @@ class EcholicenseVpnService : VpnService() {
                     profile = server,
                     primaryDns = resolvedDns,
                     enableIranSplit = current.iranSplitEnabled,
-                    mtu = mtu,
+                    mtu = finalMtu,
                     muxConfig = current.muxConfig,
                     hasGeoFiles = hasGeoFiles
                 )
                 startXrayTun(
                     configJson = configJson,
                     dnsIp = resolvedDns.ipv4,
-                    mtu = mtu,
+                    mtu = finalMtu,
                     enableIranSplit = current.iranSplitEnabled
                 )
 
                 VpnStateManager.setConnected()
                 val muxLabel = if (current.muxConfig.enabled) " • Mux" else ""
-                updateNotification("متصل به ${server.name} • MTU: $mtu$muxLabel")
+                updateNotification("${server.name} • MTU: $finalMtu$muxLabel")
                 startTelemetryLoop()
 
             } catch (e: CancellationException) {
@@ -120,7 +135,7 @@ class EcholicenseVpnService : VpnService() {
                 VpnStateManager.update {
                     it.copy(
                         connectionState = ConnectionState.ERROR,
-                        statusMessage = "خطا: ${t.localizedMessage ?: t.javaClass.simpleName}"
+                        statusMessage = "${if (isEn) "Error" else "خطا"}: ${t.localizedMessage ?: t.javaClass.simpleName}"
                     )
                 }
                 stopVpn(stopSelfNow = true)
@@ -156,7 +171,7 @@ class EcholicenseVpnService : VpnService() {
             runCatching { builder.addDisallowedApplication(pkg) }
         }
 
-        tunInterface = builder.establish() ?: throw IllegalStateException("دسترسی VpnService صادر نشد.")
+        tunInterface = builder.establish() ?: throw IllegalStateException("VpnService permission denied.")
 
         Libv2ray.initCoreEnv(filesDir.absolutePath, "")
         val controller = Libv2ray.newCoreController(object : CoreCallbackHandler {
@@ -217,7 +232,7 @@ class EcholicenseVpnService : VpnService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "اتصال Echolicense VPN",
+                "Echolicense VPN",
                 NotificationManager.IMPORTANCE_LOW
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)

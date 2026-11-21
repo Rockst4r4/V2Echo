@@ -20,20 +20,24 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.echolicense.vpn.core.EcholicenseVpnService
 import com.echolicense.vpn.core.VpnStateManager
-import com.echolicense.vpn.data.ConnectionState
-import com.echolicense.vpn.data.MuxConfig
-import com.echolicense.vpn.data.SubscriptionInfo
-import com.echolicense.vpn.data.SubscriptionRepository
+import com.echolicense.vpn.data.*
 import com.echolicense.vpn.ui.MainScreen
 import com.echolicense.vpn.worker.AnnouncementWorker
 import com.echolicense.vpn.worker.TrafficAlertWorker
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
     companion object {
         private const val KEY_MTU = "custom_mtu"
+        private const val KEY_AUTO_MTU = "auto_mtu"
         private const val KEY_MANUAL_DNS = "manual_dns"
+        private const val KEY_LANG = "app_lang"
+        private const val KEY_SUBS_JSON = "saved_subscriptions_json"
+        private const val KEY_ACTIVE_SUB_ID = "active_subscription_id"
         private const val KEY_MUX_ENABLED = "mux_enabled"
         private const val KEY_MUX_CONC = "mux_concurrency"
         private const val KEY_MUX_XUDP = "mux_xudp"
@@ -63,7 +67,9 @@ class MainActivity : ComponentActivity() {
         }
 
         val prefs = getSharedPreferences(TrafficAlertWorker.PREFS_NAME, Context.MODE_PRIVATE)
-        val savedMtu = prefs.getInt(KEY_MTU, 1400).coerceIn(1200, 1500)
+        val savedLang = if (prefs.getString(KEY_LANG, "fa") == "en") AppLanguage.EN else AppLanguage.FA
+        val savedMtu = prefs.getInt(KEY_MTU, 1360).coerceIn(1200, 1500)
+        val savedAutoMtu = prefs.getBoolean(KEY_AUTO_MTU, true)
         val savedManualDns = prefs.getString(KEY_MANUAL_DNS, "").orEmpty()
         val savedMux = MuxConfig(
             enabled = prefs.getBoolean(KEY_MUX_ENABLED, false),
@@ -71,40 +77,58 @@ class MainActivity : ComponentActivity() {
             xudpConcurrency = prefs.getInt(KEY_MUX_XUDP, 16),
             xudpProxyUDP443 = prefs.getString(KEY_MUX_UDP443, "reject") ?: "reject"
         )
-        val savedSub = prefs.getString(TrafficAlertWorker.KEY_SUB_URL, "").orEmpty()
+
+        var subs = loadSubscriptions(prefs)
+        var activeSubId = prefs.getString(KEY_ACTIVE_SUB_ID, null)
+        val legacySub = prefs.getString(TrafficAlertWorker.KEY_SUB_URL, "").orEmpty()
+        if (subs.isEmpty() && legacySub.isNotBlank()) {
+            val item = SubscriptionItem(UUID.randomUUID().toString(), "اشتراک اصلی", legacySub)
+            subs = listOf(item)
+            activeSubId = item.id
+            saveSubscriptions(prefs, subs, activeSubId)
+        }
+        val activeSub = subs.firstOrNull { it.id == activeSubId } ?: subs.firstOrNull()
 
         VpnStateManager.update {
             it.copy(
+                language = savedLang,
                 mtu = savedMtu,
+                autoMtuEnabled = savedAutoMtu,
                 manualDns = savedManualDns,
                 muxConfig = savedMux,
-                currentSubUrl = savedSub
+                subscriptions = subs,
+                activeSubscriptionId = activeSub?.id,
+                currentSubUrl = activeSub?.url.orEmpty()
             )
         }
 
-        // فعال‌سازی و بررسی فوری اطلاعیه‌ها و کدهای تخفیف داینامیک
         AnnouncementWorker.schedule(this)
-        lifecycleScope.launch {
-            AnnouncementWorker.fetchAndProcess(this@MainActivity)
-        }
+        lifecycleScope.launch { AnnouncementWorker.fetchAndProcess(this@MainActivity) }
 
-        if (savedSub.isNotBlank() && VpnStateManager.state.value.servers.isEmpty()) {
-            handleImport(savedSub)
+        if (activeSub != null && VpnStateManager.state.value.servers.isEmpty()) {
+            loadSubscriptionUrl(activeSub.url)
         }
 
         setContent {
             val uiState by VpnStateManager.state.collectAsStateWithLifecycle()
+            val dir = if (uiState.language == AppLanguage.FA) LayoutDirection.Rtl else LayoutDirection.Ltr
 
-            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            CompositionLocalProvider(LocalLayoutDirection provides dir) {
                 MainScreen(
                     uiState = uiState,
+                    onToggleLanguage = {
+                        val next = if (uiState.language == AppLanguage.FA) AppLanguage.EN else AppLanguage.FA
+                        prefs.edit().putString(KEY_LANG, next.code).apply()
+                        VpnStateManager.update { it.copy(language = next) }
+                    },
                     onPowerClick = { handlePowerToggle() },
-                    onImportInput = { handleImport(it) },
+                    onAddSubscription = { name, input -> handleAddSubscription(prefs, name, input) },
+                    onSwitchSubscription = { item -> handleSwitchSubscription(prefs, item) },
+                    onDeleteSubscription = { item -> handleDeleteSubscription(prefs, item) },
                     onRefreshSubscription = {
                         val url = VpnStateManager.state.value.currentSubUrl
-                        if (url.isNotBlank()) handleImport(url)
+                        if (url.isNotBlank()) loadSubscriptionUrl(url)
                     },
-                    onDeleteSubscription = { handleDeleteSubscription() },
                     onSelectServer = { srv ->
                         val wasConnected = VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED
                         VpnStateManager.update { it.copy(activeServer = srv) }
@@ -115,10 +139,14 @@ class MainActivity : ComponentActivity() {
                         VpnStateManager.update { it.copy(iranSplitEnabled = enabled) }
                     },
                     onToggleAiPro = { handleToggleAiPro() },
+                    onToggleAutoMtu = { enabled ->
+                        prefs.edit().putBoolean(KEY_AUTO_MTU, enabled).apply()
+                        VpnStateManager.update { it.copy(autoMtuEnabled = enabled) }
+                    },
                     onChangeMtu = { newMtu ->
                         val clamped = newMtu.coerceIn(1200, 1500)
-                        prefs.edit().putInt(KEY_MTU, clamped).apply()
-                        VpnStateManager.update { it.copy(mtu = clamped) }
+                        prefs.edit().putInt(KEY_MTU, clamped).putBoolean(KEY_AUTO_MTU, false).apply()
+                        VpnStateManager.update { it.copy(mtu = clamped, autoMtuEnabled = false) }
                     },
                     onApplyReconnect = {
                         if (VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
@@ -144,9 +172,7 @@ class MainActivity : ComponentActivity() {
                             dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
                         }
                     },
-                    onDismissAnnouncement = { id ->
-                        AnnouncementWorker.dismissBanner(this@MainActivity, id)
-                    },
+                    onDismissAnnouncement = { id -> AnnouncementWorker.dismissBanner(this@MainActivity, id) },
                     onOpenUrl = { url -> openExternalUrl(url) },
                     onOpenBot = { openTelegramBot(VpnStateManager.state.value.botUsername) }
                 )
@@ -154,142 +180,139 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openTelegramBot(username: String) {
-        val clean = username.trim().removePrefix("@").ifBlank { "echopress_bot" }
-        val tgIntent = Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=$clean"))
-        runCatching { startActivity(tgIntent) }.onFailure {
-            openExternalUrl("https://t.me/$clean")
+    private fun loadSubscriptions(prefs: android.content.SharedPreferences): List<SubscriptionItem> {
+        val raw = prefs.getString(KEY_SUBS_JSON, null) ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                SubscriptionItem(
+                    id = obj.getString("id"),
+                    name = obj.getString("name"),
+                    url = obj.getString("url")
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveSubscriptions(
+        prefs: android.content.SharedPreferences,
+        list: List<SubscriptionItem>,
+        activeId: String?
+    ) {
+        val arr = JSONArray()
+        list.forEach {
+            arr.put(JSONObject().put("id", it.id).put("name", it.name).put("url", it.url))
+        }
+        prefs.edit()
+            .putString(KEY_SUBS_JSON, arr.toString())
+            .putString(KEY_ACTIVE_SUB_ID, activeId)
+            .apply()
+    }
+
+    private fun handleAddSubscription(
+        prefs: android.content.SharedPreferences,
+        name: String,
+        input: String
+    ) {
+        if (input.startsWith("http://", true) || input.startsWith("https://", true)) {
+            val currentList = VpnStateManager.state.value.subscriptions.toMutableList()
+            val label = name.ifBlank { "اشتراک #${currentList.size + 1}" }
+            val newItem = SubscriptionItem(UUID.randomUUID().toString(), label, input)
+            currentList.add(newItem)
+            saveSubscriptions(prefs, currentList, newItem.id)
+            VpnStateManager.update {
+                it.copy(
+                    subscriptions = currentList,
+                    activeSubscriptionId = newItem.id,
+                    currentSubUrl = newItem.url
+                )
+            }
+            loadSubscriptionUrl(newItem.url)
+        } else {
+            val parsed = repo.parseSingleInput(input)
+            VpnStateManager.update {
+                it.copy(
+                    servers = it.servers + parsed,
+                    activeServer = parsed.firstOrNull() ?: it.activeServer,
+                    statusMessage = "کانفیگ اضافه شد"
+                )
+            }
         }
     }
 
-    private fun openExternalUrl(url: String) {
-        runCatching {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        }
-    }
-
-    private fun handleDeleteSubscription() {
+    private fun handleSwitchSubscription(
+        prefs: android.content.SharedPreferences,
+        item: SubscriptionItem
+    ) {
         if (VpnStateManager.state.value.connectionState != ConnectionState.DISCONNECTED) {
             dispatchVpnAction(EcholicenseVpnService.ACTION_DISCONNECT)
         }
-        TrafficAlertWorker.cancel(this)
+        saveSubscriptions(prefs, VpnStateManager.state.value.subscriptions, item.id)
         VpnStateManager.update {
-            it.copy(
-                currentSubUrl = "",
-                subscriptionInfo = SubscriptionInfo(),
-                servers = emptyList(),
-                activeServer = null,
-                aiProOnly = false,
-                statusMessage = "اشتراک فعلی حذف شد"
-            )
+            it.copy(activeSubscriptionId = item.id, currentSubUrl = item.url)
         }
+        loadSubscriptionUrl(item.url)
     }
 
-    private fun handleToggleAiPro() {
-        val current = VpnStateManager.state.value
-        val nextEnabled = !current.aiProOnly
+    private fun handleDeleteSubscription(
+        prefs: android.content.SharedPreferences,
+        item: SubscriptionItem
+    ) {
+        val updated = VpnStateManager.state.value.subscriptions.filterNot { it.id == item.id }
+        val wasActive = VpnStateManager.state.value.activeSubscriptionId == item.id
+        val nextActive = if (wasActive) updated.firstOrNull() else {
+            updated.firstOrNull { it.id == VpnStateManager.state.value.activeSubscriptionId }
+        }
+        saveSubscriptions(prefs, updated, nextActive?.id)
 
-        if (nextEnabled) {
-            val aiServers = current.servers.filter { it.isAiPro() }
-            if (aiServers.isEmpty()) {
-                VpnStateManager.update {
-                    it.copy(aiProOnly = false, statusMessage = "سرور AI Pro در اشتراک شما یافت نشد")
-                }
-                return
-            }
-            val bestAi = aiServers.first()
-            val isConnected = current.connectionState == ConnectionState.CONNECTED
+        if (wasActive && VpnStateManager.state.value.connectionState != ConnectionState.DISCONNECTED) {
+            dispatchVpnAction(EcholicenseVpnService.ACTION_DISCONNECT)
+        }
+
+        if (nextActive == null) {
+            TrafficAlertWorker.cancel(this)
             VpnStateManager.update {
                 it.copy(
-                    aiProOnly = true,
-                    activeServer = bestAi,
-                    statusMessage = "حالت AI Pro فعال شد (${bestAi.name})"
+                    subscriptions = updated,
+                    activeSubscriptionId = null,
+                    currentSubUrl = "",
+                    subscriptionInfo = SubscriptionInfo(),
+                    servers = emptyList(),
+                    activeServer = null,
+                    statusMessage = "اشتراک حذف شد"
                 )
             }
-            if (isConnected) dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT) else startVpnWithPermission()
         } else {
             VpnStateManager.update {
-                it.copy(aiProOnly = false, statusMessage = "حالت عادی (تمام سرورها)")
+                it.copy(
+                    subscriptions = updated,
+                    activeSubscriptionId = nextActive.id,
+                    currentSubUrl = nextActive.url
+                )
             }
+            if (wasActive) loadSubscriptionUrl(nextActive.url)
         }
     }
 
-    private fun handlePowerToggle() {
-        val state = VpnStateManager.state.value
-        if (state.connectionState == ConnectionState.CONNECTED ||
-            state.connectionState == ConnectionState.CONNECTING
-        ) {
-            dispatchVpnAction(EcholicenseVpnService.ACTION_DISCONNECT)
-            return
-        }
-
-        if (state.aiProOnly) {
-            val bestAi = state.servers.firstOrNull { it.isAiPro() }
-            if (bestAi == null) {
-                VpnStateManager.update { it.copy(statusMessage = "سرور AI Pro در اشتراک یافت نشد") }
-                return
-            }
-            if (state.activeServer?.isAiPro() != true) {
-                VpnStateManager.update { it.copy(activeServer = bestAi) }
-            }
-        }
-
-        if (VpnStateManager.state.value.activeServer == null) {
-            VpnStateManager.update { it.copy(statusMessage = "ابتدا لینک اشتراک یا کانفیگ اضافه کنید") }
-            return
-        }
-
-        startVpnWithPermission()
-    }
-
-    private fun startVpnWithPermission() {
-        val prepareIntent = VpnService.prepare(this)
-        if (prepareIntent != null) {
-            vpnPermissionLauncher.launch(prepareIntent)
-        } else {
-            dispatchVpnAction(EcholicenseVpnService.ACTION_CONNECT)
-        }
-    }
-
-    private fun dispatchVpnAction(action: String) {
-        val intent = Intent(this, EcholicenseVpnService::class.java).setAction(action)
-        ContextCompat.startForegroundService(this, intent)
-    }
-
-    private fun handleImport(input: String) {
+    private fun loadSubscriptionUrl(url: String) {
         lifecycleScope.launch {
-            VpnStateManager.update { it.copy(statusMessage = "در حال دریافت سرورها و حجم...") }
+            VpnStateManager.update { it.copy(statusMessage = "در حال دریافت سرورها و ثبت HWID...") }
             try {
-                if (input.startsWith("http://", true) || input.startsWith("https://", true)) {
-                    val (subInfo, servers) = repo.fetchSubscription(input)
-                    val sorted = repo.pingAllServers(servers)
-                    VpnStateManager.update { state ->
-                        val preferred = if (state.aiProOnly) {
-                            sorted.firstOrNull { it.isAiPro() }
-                        } else {
-                            sorted.firstOrNull()
-                        }
-                        state.copy(
-                            currentSubUrl = input,
-                            subscriptionInfo = subInfo,
-                            servers = sorted,
-                            activeServer = preferred,
-                            statusMessage = "${sorted.size} سرور آماده اتصال"
-                        )
-                    }
-                    TrafficAlertWorker.schedule(this@MainActivity, input)
-                    TrafficAlertWorker.evaluateAndNotify(this@MainActivity, subInfo)
-                } else {
-                    val parsed = repo.parseSingleInput(input)
-                    VpnStateManager.update {
-                        val merged = it.servers + parsed
-                        it.copy(
-                            servers = merged,
-                            activeServer = parsed.firstOrNull() ?: it.activeServer,
-                            statusMessage = "کانفیگ اضافه شد"
-                        )
-                    }
+                val (subInfo, servers) = repo.fetchSubscription(url, this@MainActivity)
+                val sorted = repo.pingAllServers(servers)
+                VpnStateManager.update { state ->
+                    val preferred = if (state.aiProOnly) sorted.firstOrNull { it.isAiPro() } else sorted.firstOrNull()
+                    state.copy(
+                        currentSubUrl = url,
+                        subscriptionInfo = subInfo,
+                        servers = sorted,
+                        activeServer = preferred,
+                        statusMessage = "${sorted.size} سرور آماده اتصال"
+                    )
                 }
+                TrafficAlertWorker.schedule(this@MainActivity, url)
+                TrafficAlertWorker.evaluateAndNotify(this@MainActivity, subInfo)
             } catch (e: Exception) {
                 VpnStateManager.update {
                     it.copy(statusMessage = "خطا: ${e.localizedMessage ?: "لینک نامعتبر"}")
@@ -298,17 +321,65 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openTelegramBot(username: String) {
+        val clean = username.trim().removePrefix("@").ifBlank { "echopress_bot" }
+        val tgIntent = Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=$clean"))
+        runCatching { startActivity(tgIntent) }.onFailure { openExternalUrl("https://t.me/$clean") }
+    }
+
+    private fun openExternalUrl(url: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    }
+
+    private fun handleToggleAiPro() {
+        val current = VpnStateManager.state.value
+        val nextEnabled = !current.aiProOnly
+        if (nextEnabled) {
+            val aiServers = current.servers.filter { it.isAiPro() }
+            if (aiServers.isEmpty()) {
+                VpnStateManager.update { it.copy(aiProOnly = false, statusMessage = "سرور AI Pro یافت نشد") }
+                return
+            }
+            val bestAi = aiServers.first()
+            val isConnected = current.connectionState == ConnectionState.CONNECTED
+            VpnStateManager.update { it.copy(aiProOnly = true, activeServer = bestAi) }
+            if (isConnected) dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT) else startVpnWithPermission()
+        } else {
+            VpnStateManager.update { it.copy(aiProOnly = false) }
+        }
+    }
+
+    private fun handlePowerToggle() {
+        val state = VpnStateManager.state.value
+        if (state.connectionState == ConnectionState.CONNECTED || state.connectionState == ConnectionState.CONNECTING) {
+            dispatchVpnAction(EcholicenseVpnService.ACTION_DISCONNECT)
+            return
+        }
+        if (state.aiProOnly) {
+            val bestAi = state.servers.firstOrNull { it.isAiPro() } ?: return
+            if (state.activeServer?.isAiPro() != true) VpnStateManager.update { it.copy(activeServer = bestAi) }
+        }
+        if (VpnStateManager.state.value.activeServer == null) return
+        startVpnWithPermission()
+    }
+
+    private fun startVpnWithPermission() {
+        val prepareIntent = VpnService.prepare(this)
+        if (prepareIntent != null) vpnPermissionLauncher.launch(prepareIntent)
+        else dispatchVpnAction(EcholicenseVpnService.ACTION_CONNECT)
+    }
+
+    private fun dispatchVpnAction(action: String) {
+        ContextCompat.startForegroundService(this, Intent(this, EcholicenseVpnService::class.java).setAction(action))
+    }
+
     private fun runSmartPing() {
         lifecycleScope.launch {
             val current = VpnStateManager.state.value.servers
             if (current.isEmpty()) return@launch
             val sorted = repo.pingAllServers(current)
             VpnStateManager.update { state ->
-                val preferred = if (state.aiProOnly) {
-                    sorted.firstOrNull { it.isAiPro() }
-                } else {
-                    sorted.firstOrNull()
-                }
+                val preferred = if (state.aiProOnly) sorted.firstOrNull { it.isAiPro() } else sorted.firstOrNull()
                 state.copy(servers = sorted, activeServer = preferred)
             }
         }

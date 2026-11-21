@@ -6,16 +6,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class VpnUiState(
+    val language: AppLanguage = AppLanguage.FA,
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val activeServer: ServerProfile? = null,
     val servers: List<ServerProfile> = emptyList(),
+    val subscriptions: List<SubscriptionItem> = emptyList(),
+    val activeSubscriptionId: String? = null,
     val currentSubUrl: String = "",
     val subscriptionInfo: SubscriptionInfo = SubscriptionInfo(),
     val activeDns: DnsProvider? = null,
     val manualDns: String = "",
     val iranSplitEnabled: Boolean = true,
     val aiProOnly: Boolean = false,
-    val mtu: Int = 1400,
+    val autoMtuEnabled: Boolean = true,
+    val mtu: Int = 1360,
     val muxConfig: MuxConfig = MuxConfig(),
     val announcement: DynamicAnnouncement? = null,
     val botUsername: String = "echopress_bot",
@@ -34,13 +38,15 @@ object VpnStateManager {
     }
 
     fun setConnected() = update {
-        it.copy(connectionState = ConnectionState.CONNECTED, statusMessage = "متصل و ایمن (TUN)")
+        val msg = if (it.language == AppLanguage.EN) "Connected & Secured (TUN)" else "متصل و ایمن (TUN)"
+        it.copy(connectionState = ConnectionState.CONNECTED, statusMessage = msg)
     }
 
     fun setDisconnected() = update {
+        val msg = if (it.language == AppLanguage.EN) "Disconnected" else "قطع شده"
         it.copy(
             connectionState = ConnectionState.DISCONNECTED,
-            statusMessage = "قطع شده",
+            statusMessage = msg,
             downloadSpeedKbps = 0,
             uploadSpeedKbps = 0,
             connectedSeconds = 0
