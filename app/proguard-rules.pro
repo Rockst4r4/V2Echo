@@ -1,2 +1,3 @@
 -keep class libv2ray.** { *; }
--keep class com.wireguard.** { *; }
+-keep class com.journeyapps.** { *; }
+-keep class com.google.zxing.** { *; }

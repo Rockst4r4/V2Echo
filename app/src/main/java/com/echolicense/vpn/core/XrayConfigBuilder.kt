@@ -18,6 +18,7 @@ object XrayConfigBuilder {
         profile: ServerProfile,
         primaryDns: DnsProvider,
         enableIranSplit: Boolean,
+        enableAdBlocker: Boolean,
         mtu: Int,
         muxConfig: MuxConfig,
         hasGeoFiles: Boolean
@@ -85,7 +86,6 @@ object XrayConfigBuilder {
             VpnProtocol.VLESS, VpnProtocol.TROJAN -> buildUriOutbound(profile, muxConfig.enabled)
         }
 
-        // اعمال سازوکار Mux Mode روی VLESS / VMess / Trojan (WireGuard از Mux پشتیبانی نمی‌کند)
         if (muxConfig.enabled && profile.protocol != VpnProtocol.WIREGUARD) {
             proxyOutbound.put(
                 "mux",
@@ -152,6 +152,30 @@ object XrayConfigBuilder {
             }
         }
 
+        if (enableAdBlocker) {
+            val adDomains = JSONArray()
+                .put("domain:doubleclick.net")
+                .put("domain:googlesyndication.com")
+                .put("domain:googleadservices.com")
+                .put("domain:adservice.google.com")
+                .put("domain:pagead2.googlesyndication.com")
+                .put("domain:ads.youtube.com")
+                .put("domain:s0.2mdn.net")
+                .put("domain:app-measurement.com")
+                .put("domain:admob.com")
+                .put("domain:unityads.unity3d.com")
+                .put("domain:applovin.com")
+            if (hasGeoFiles) {
+                adDomains.put("geosite:category-ads-all")
+            }
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("domain", adDomains)
+                    .put("outboundTag", "block")
+            )
+        }
+
         root.put(
             "routing",
             JSONObject()
@@ -201,7 +225,7 @@ object XrayConfigBuilder {
         }
 
         if (secretKey.isBlank() || publicKey.isBlank()) {
-            throw IllegalArgumentException("کلید PrivateKey یا PublicKey در کانفیگ WireGuard ناقص است.")
+            throw IllegalArgumentException("WireGuard PrivateKey or PublicKey is missing.")
         }
         if (endpoint.isBlank()) {
             endpoint = if (profile.host.contains(":")) "[${profile.host}]:${profile.port}" else "${profile.host}:${profile.port}"
@@ -401,7 +425,6 @@ object XrayConfigBuilder {
                 .put("id", userSecret)
                 .put("encryption", params["encryption"] ?: "none")
             val rawFlow = params["flow"]?.trim().orEmpty()
-            // در Xray-core ترکیب xtls-rprx-vision با mux مجاز نیست؛ هنگام فعال بودن Mux فیلد flow حذف می‌شود
             if (rawFlow.isNotBlank() && !(muxEnabled && rawFlow.contains("vision", ignoreCase = true))) {
                 user.put("flow", rawFlow)
             }

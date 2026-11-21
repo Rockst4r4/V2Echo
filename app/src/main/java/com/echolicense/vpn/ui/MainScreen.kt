@@ -39,6 +39,7 @@ private val AiProAccent = Color(0xFFA855F7)
 fun MainScreen(
     uiState: VpnUiState,
     onToggleLanguage: () -> Unit,
+    onScanQrClick: () -> Unit,
     onPowerClick: () -> Unit,
     onAddSubscription: (String, String) -> Unit,
     onSwitchSubscription: (SubscriptionItem) -> Unit,
@@ -47,6 +48,7 @@ fun MainScreen(
     onSelectServer: (ServerProfile) -> Unit,
     onSmartPingClick: () -> Unit,
     onToggleIranSplit: (Boolean) -> Unit,
+    onToggleAdBlocker: (Boolean) -> Unit,
     onToggleAiPro: () -> Unit,
     onToggleAutoMtu: (Boolean) -> Unit,
     onChangeMtu: (Int) -> Unit,
@@ -77,7 +79,7 @@ fun MainScreen(
                 .padding(horizontal = 20.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 1. نوار بالایی (لوگو + دکمه تغییر زبان FA/EN + دکمه اشتراک‌ها)
+            // 1. نوار بالایی (لوگو + تغییر زبان + اسکن QR + اشتراک‌ها)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -92,18 +94,18 @@ fun MainScreen(
                     )
                     Spacer(Modifier.width(10.dp))
                     Column {
-                        Text("Echolicense", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text("Echolicense", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
                         Text(
                             text = uiState.statusMessage,
                             color = Color.White.copy(alpha = 0.65f),
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     LiquidGlassCard(
                         cornerRadius = 14.dp,
                         modifier = Modifier.bounceClick(onClick = onToggleLanguage)
@@ -113,21 +115,34 @@ fun MainScreen(
                             color = CyanLiquid,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp)
                         )
                     }
 
                     LiquidGlassCard(
-                        cornerRadius = 16.dp,
+                        cornerRadius = 14.dp,
+                        highlightColor = EmeraldGlow.copy(alpha = 0.7f),
+                        modifier = Modifier.bounceClick(onClick = onScanQrClick)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.QrCodeScanner,
+                            contentDescription = s.scanQr,
+                            tint = EmeraldGlow,
+                            modifier = Modifier.padding(8.dp).size(19.dp)
+                        )
+                    }
+
+                    LiquidGlassCard(
+                        cornerRadius = 14.dp,
                         modifier = Modifier.bounceClick { showSubDialog = true }
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(Icons.Rounded.AddLink, null, tint = Color.White, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(s.subscriptions, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.width(4.dp))
+                            Text(s.subscriptions, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         }
                     }
                 }
@@ -146,7 +161,7 @@ fun MainScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // 3. دکمه پاور انیمیشنی
+            // 3. دکمه پاور مرکزی
             ExpressGlassPowerButton(
                 state = uiState.connectionState,
                 connectedSeconds = uiState.connectedSeconds,
@@ -166,7 +181,7 @@ fun MainScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // 5. انتخاب سرور + دکمه مستقیم تست پینگ همه کانفیگ‌ها
+            // 5. انتخاب سرور + دکمه Ping All
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -332,7 +347,7 @@ fun MainScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // 9. بایپس ایران + Mux Mode
+            // 9. تنظیمات: بایپس ایران + AdBlocker + Mux Mode
             LiquidGlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 22.dp) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Row(
@@ -344,6 +359,24 @@ fun MainScreen(
                         Switch(
                             checked = uiState.iranSplitEnabled,
                             onCheckedChange = onToggleIranSplit,
+                            colors = SwitchDefaults.colors(checkedTrackColor = EmeraldGlow)
+                        )
+                    }
+
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(vertical = 4.dp)) {
+                            Text(s.adBlockerTitle, color = Color.White, fontSize = 13.sp)
+                            Text(s.adBlockerSub, color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp)
+                        }
+                        Switch(
+                            checked = uiState.adBlockerEnabled,
+                            onCheckedChange = onToggleAdBlocker,
                             colors = SwitchDefaults.colors(checkedTrackColor = EmeraldGlow)
                         )
                     }
@@ -429,6 +462,10 @@ fun MainScreen(
             subscriptions = uiState.subscriptions,
             activeId = uiState.activeSubscriptionId,
             onDismiss = { showSubDialog = false },
+            onScanQr = {
+                showSubDialog = false
+                onScanQrClick()
+            },
             onAddNew = { name, input ->
                 showSubDialog = false
                 onAddSubscription(name, input)
@@ -485,6 +522,7 @@ private fun MultiSubscriptionDialog(
     subscriptions: List<SubscriptionItem>,
     activeId: String?,
     onDismiss: () -> Unit,
+    onScanQr: () -> Unit,
     onAddNew: (String, String) -> Unit,
     onSwitch: (SubscriptionItem) -> Unit,
     onDelete: (SubscriptionItem) -> Unit
@@ -498,10 +536,26 @@ private fun MultiSubscriptionDialog(
         title = { Text(s.manageSubsTitle, color = Color.White) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(EmeraldGlow.copy(alpha = 0.18f))
+                        .border(1.dp, EmeraldGlow.copy(alpha = 0.65f), RoundedCornerShape(14.dp))
+                        .bounceClick(onClick = onScanQr)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.QrCodeScanner, null, tint = EmeraldGlow, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(s.scanQr, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
                 if (subscriptions.isNotEmpty()) {
                     Text(s.savedSubs, color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
                     LazyColumn(
-                        modifier = Modifier.heightIn(max = 170.dp),
+                        modifier = Modifier.heightIn(max = 150.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(subscriptions, key = { it.id }) { sub ->

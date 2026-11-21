@@ -4,6 +4,7 @@ import com.echolicense.vpn.data.AppLanguage
 
 data class AppStrings(
     val subscriptions: String,
+    val scanQr: String,
     val tapToConnect: String,
     val aiProTitle: String,
     val aiProActiveSub: (Int) -> String,
@@ -55,6 +56,7 @@ data class AppStrings(
 fun stringsFor(lang: AppLanguage): AppStrings = when (lang) {
     AppLanguage.FA -> AppStrings(
         subscriptions = "اشتراک‌ها",
+        scanQr = "اسکن QR Code با دوربین",
         tapToConnect = "برای اتصال لمس کنید",
         aiProTitle = "حالت اختصاصی AI Pro",
         aiProActiveSub = { "متصل انحصاری به سرورهای AI Pro ($it سرور)" },
@@ -62,7 +64,7 @@ fun stringsFor(lang: AppLanguage): AppStrings = when (lang) {
         active = "فعال",
         off = "خاموش",
         noServerSelected = "سروری انتخاب نشده",
-        addSubHint = "لینک ساب یا WireGuard اضافه کنید",
+        addSubHint = "لینک ساب یا QR اضافه کنید",
         pingAllBtn = "تست پینگ",
         pingingNow = "در حال تست...",
         remainingQuota = "حجم باقی‌مانده اشتراک",
@@ -105,6 +107,7 @@ fun stringsFor(lang: AppLanguage): AppStrings = when (lang) {
 
     AppLanguage.EN -> AppStrings(
         subscriptions = "Subs",
+        scanQr = "Scan QR Code",
         tapToConnect = "Tap to connect",
         aiProTitle = "AI Pro Exclusive Mode",
         aiProActiveSub = { "Connected exclusively to AI Pro ($it servers)" },
@@ -112,7 +115,7 @@ fun stringsFor(lang: AppLanguage): AppStrings = when (lang) {
         active = "ON",
         off = "OFF",
         noServerSelected = "No server selected",
-        addSubHint = "Add a subscription or WireGuard config",
+        addSubHint = "Add sub link or scan QR",
         pingAllBtn = "Ping All",
         pingingNow = "Pinging...",
         remainingQuota = "Remaining Traffic",

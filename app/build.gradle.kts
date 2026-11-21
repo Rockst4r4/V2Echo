@@ -12,8 +12,8 @@ android {
         applicationId = "com.echolicense.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 7
+        versionName = "1.6.0"
     }
 
     buildTypes {
@@ -52,6 +52,9 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+
+    // اسکنر QR Code آفلاین و سبک (بدون وابستگی به ماژول آنلاین گوگل‌پلی)
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)

@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -45,8 +48,8 @@
         <service
             android:name="com.echolicense.vpn.tile.EcholicenseTileService"
             android:exported="true"
-            android:icon="@drawable/ic_launcher_fg"
-            android:label="Echolicense VPN"
+            android:icon="@drawable/ic_qs_tile"
+            android:label="Echolicense"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

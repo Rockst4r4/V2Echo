@@ -25,6 +25,8 @@ import com.echolicense.vpn.ui.MainScreen
 import com.echolicense.vpn.worker.AnnouncementWorker
 import com.echolicense.vpn.worker.SubscriptionAutoUpdateWorker
 import com.echolicense.vpn.worker.TrafficAlertWorker
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -37,6 +39,7 @@ class MainActivity : ComponentActivity() {
         private const val KEY_AUTO_MTU = "auto_mtu"
         private const val KEY_MANUAL_DNS = "manual_dns"
         private const val KEY_LANG = "app_lang"
+        private const val KEY_ADBLOCK = "adblock_enabled"
         private const val KEY_SUBS_JSON = "saved_subscriptions_json"
         private const val KEY_ACTIVE_SUB_ID = "active_subscription_id"
         private const val KEY_MUX_ENABLED = "mux_enabled"
@@ -46,6 +49,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val repo = SubscriptionRepository()
+    private val prefs by lazy { getSharedPreferences(TrafficAlertWorker.PREFS_NAME, Context.MODE_PRIVATE) }
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -59,6 +63,14 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { }
 
+    private val qrScannerLauncher = registerForActivityResult(ScanContract()) { result ->
+        val scanned = result.contents?.trim()
+        if (!scanned.isNullOrBlank()) {
+            val count = VpnStateManager.state.value.subscriptions.size + 1
+            handleAddSubscription("QR Sub #$count", scanned)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -67,8 +79,8 @@ class MainActivity : ComponentActivity() {
             notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        val prefs = getSharedPreferences(TrafficAlertWorker.PREFS_NAME, Context.MODE_PRIVATE)
-        val savedLang = if (prefs.getString(KEY_LANG, "fa") == "en") AppLanguage.EN else AppLanguage.FA
+        val savedLang = if (prefs.getString(KEY_LANG, "en") == "fa") AppLanguage.FA else AppLanguage.EN
+        val savedAdBlock = prefs.getBoolean(KEY_ADBLOCK, true)
         val savedMtu = prefs.getInt(KEY_MTU, 1360).coerceIn(1200, 1500)
         val savedAutoMtu = prefs.getBoolean(KEY_AUTO_MTU, true)
         val savedManualDns = prefs.getString(KEY_MANUAL_DNS, "").orEmpty()
@@ -79,20 +91,21 @@ class MainActivity : ComponentActivity() {
             xudpProxyUDP443 = prefs.getString(KEY_MUX_UDP443, "reject") ?: "reject"
         )
 
-        var subs = loadSubscriptions(prefs)
+        var subs = loadSubscriptions()
         var activeSubId = prefs.getString(KEY_ACTIVE_SUB_ID, null)
         val legacySub = prefs.getString(TrafficAlertWorker.KEY_SUB_URL, "").orEmpty()
         if (subs.isEmpty() && legacySub.isNotBlank()) {
-            val item = SubscriptionItem(UUID.randomUUID().toString(), "اشتراک اصلی", legacySub)
+            val item = SubscriptionItem(UUID.randomUUID().toString(), "Main Plan", legacySub)
             subs = listOf(item)
             activeSubId = item.id
-            saveSubscriptions(prefs, subs, activeSubId)
+            saveSubscriptions(subs, activeSubId)
         }
         val activeSub = subs.firstOrNull { it.id == activeSubId } ?: subs.firstOrNull()
 
         VpnStateManager.update {
             it.copy(
                 language = savedLang,
+                adBlockerEnabled = savedAdBlock,
                 mtu = savedMtu,
                 autoMtuEnabled = savedAutoMtu,
                 manualDns = savedManualDns,
@@ -125,10 +138,11 @@ class MainActivity : ComponentActivity() {
                         prefs.edit().putString(KEY_LANG, next.code).apply()
                         VpnStateManager.update { it.copy(language = next) }
                     },
+                    onScanQrClick = { launchQrScanner() },
                     onPowerClick = { handlePowerToggle() },
-                    onAddSubscription = { name, input -> handleAddSubscription(prefs, name, input) },
-                    onSwitchSubscription = { item -> handleSwitchSubscription(prefs, item) },
-                    onDeleteSubscription = { item -> handleDeleteSubscription(prefs, item) },
+                    onAddSubscription = { name, input -> handleAddSubscription(name, input) },
+                    onSwitchSubscription = { item -> handleSwitchSubscription(item) },
+                    onDeleteSubscription = { item -> handleDeleteSubscription(item) },
                     onRefreshSubscription = {
                         val url = VpnStateManager.state.value.currentSubUrl
                         if (url.isNotBlank()) loadSubscriptionUrl(url)
@@ -141,6 +155,13 @@ class MainActivity : ComponentActivity() {
                     onSmartPingClick = { runSmartPing() },
                     onToggleIranSplit = { enabled ->
                         VpnStateManager.update { it.copy(iranSplitEnabled = enabled) }
+                    },
+                    onToggleAdBlocker = { enabled ->
+                        prefs.edit().putBoolean(KEY_ADBLOCK, enabled).apply()
+                        VpnStateManager.update { it.copy(adBlockerEnabled = enabled) }
+                        if (VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
+                            dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
+                        }
                     },
                     onToggleAiPro = { handleToggleAiPro() },
                     onToggleAutoMtu = { enabled ->
@@ -184,7 +205,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadSubscriptions(prefs: android.content.SharedPreferences): List<SubscriptionItem> {
+    private fun launchQrScanner() {
+        val isEn = VpnStateManager.state.value.language == AppLanguage.EN
+        val options = ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt(if (isEn) "Scan subscription or config QR Code" else "کد QR اشتراک یا کانفیگ را اسکن کنید")
+            setBeepEnabled(true)
+            setBarcodeImageEnabled(false)
+            setOrientationLocked(false)
+        }
+        qrScannerLauncher.launch(options)
+    }
+
+    private fun loadSubscriptions(): List<SubscriptionItem> {
         val raw = prefs.getString(KEY_SUBS_JSON, null) ?: return emptyList()
         return runCatching {
             val arr = JSONArray(raw)
@@ -199,11 +232,7 @@ class MainActivity : ComponentActivity() {
         }.getOrDefault(emptyList())
     }
 
-    private fun saveSubscriptions(
-        prefs: android.content.SharedPreferences,
-        list: List<SubscriptionItem>,
-        activeId: String?
-    ) {
+    private fun saveSubscriptions(list: List<SubscriptionItem>, activeId: String?) {
         val arr = JSONArray()
         list.forEach {
             arr.put(JSONObject().put("id", it.id).put("name", it.name).put("url", it.url))
@@ -214,17 +243,14 @@ class MainActivity : ComponentActivity() {
             .apply()
     }
 
-    private fun handleAddSubscription(
-        prefs: android.content.SharedPreferences,
-        name: String,
-        input: String
-    ) {
+    private fun handleAddSubscription(name: String, input: String) {
+        val isEn = VpnStateManager.state.value.language == AppLanguage.EN
         if (input.startsWith("http://", true) || input.startsWith("https://", true)) {
             val currentList = VpnStateManager.state.value.subscriptions.toMutableList()
-            val label = name.ifBlank { "اشتراک #${currentList.size + 1}" }
+            val label = name.ifBlank { if (isEn) "Sub #${currentList.size + 1}" else "اشتراک #${currentList.size + 1}" }
             val newItem = SubscriptionItem(UUID.randomUUID().toString(), label, input)
             currentList.add(newItem)
-            saveSubscriptions(prefs, currentList, newItem.id)
+            saveSubscriptions(currentList, newItem.id)
             VpnStateManager.update {
                 it.copy(
                     subscriptions = currentList,
@@ -239,36 +265,32 @@ class MainActivity : ComponentActivity() {
                 it.copy(
                     servers = it.servers + parsed,
                     activeServer = parsed.firstOrNull() ?: it.activeServer,
-                    statusMessage = "کانفیگ اضافه شد"
+                    statusMessage = if (parsed.isNotEmpty()) {
+                        if (isEn) "Config added" else "کانفیگ اضافه شد"
+                    } else {
+                        if (isEn) "Invalid QR / config" else "کانفیگ یا QR نامعتبر است"
+                    }
                 )
             }
         }
     }
 
-    private fun handleSwitchSubscription(
-        prefs: android.content.SharedPreferences,
-        item: SubscriptionItem
-    ) {
+    private fun handleSwitchSubscription(item: SubscriptionItem) {
         if (VpnStateManager.state.value.connectionState != ConnectionState.DISCONNECTED) {
             dispatchVpnAction(EcholicenseVpnService.ACTION_DISCONNECT)
         }
-        saveSubscriptions(prefs, VpnStateManager.state.value.subscriptions, item.id)
-        VpnStateManager.update {
-            it.copy(activeSubscriptionId = item.id, currentSubUrl = item.url)
-        }
+        saveSubscriptions(VpnStateManager.state.value.subscriptions, item.id)
+        VpnStateManager.update { it.copy(activeSubscriptionId = item.id, currentSubUrl = item.url) }
         loadSubscriptionUrl(item.url)
     }
 
-    private fun handleDeleteSubscription(
-        prefs: android.content.SharedPreferences,
-        item: SubscriptionItem
-    ) {
+    private fun handleDeleteSubscription(item: SubscriptionItem) {
         val updated = VpnStateManager.state.value.subscriptions.filterNot { it.id == item.id }
         val wasActive = VpnStateManager.state.value.activeSubscriptionId == item.id
         val nextActive = if (wasActive) updated.firstOrNull() else {
             updated.firstOrNull { it.id == VpnStateManager.state.value.activeSubscriptionId }
         }
-        saveSubscriptions(prefs, updated, nextActive?.id)
+        saveSubscriptions(updated, nextActive?.id)
 
         if (wasActive && VpnStateManager.state.value.connectionState != ConnectionState.DISCONNECTED) {
             dispatchVpnAction(EcholicenseVpnService.ACTION_DISCONNECT)
@@ -285,7 +307,7 @@ class MainActivity : ComponentActivity() {
                     subscriptionInfo = SubscriptionInfo(),
                     servers = emptyList(),
                     activeServer = null,
-                    statusMessage = "اشتراک حذف شد"
+                    statusMessage = if (it.language == AppLanguage.EN) "Subscription deleted" else "اشتراک حذف شد"
                 )
             }
         } else {
@@ -302,7 +324,10 @@ class MainActivity : ComponentActivity() {
 
     private fun loadSubscriptionUrl(url: String) {
         lifecycleScope.launch {
-            VpnStateManager.update { it.copy(statusMessage = "در حال دریافت سرورها و ثبت HWID...") }
+            val isEn = VpnStateManager.state.value.language == AppLanguage.EN
+            VpnStateManager.update {
+                it.copy(statusMessage = if (isEn) "Syncing servers & HWID..." else "در حال دریافت سرورها و ثبت HWID...")
+            }
             try {
                 val (subInfo, servers) = repo.fetchSubscription(url, this@MainActivity)
                 val sorted = repo.pingAllServers(servers)
@@ -313,7 +338,7 @@ class MainActivity : ComponentActivity() {
                         subscriptionInfo = subInfo,
                         servers = sorted,
                         activeServer = preferred,
-                        statusMessage = "${sorted.size} سرور آماده اتصال"
+                        statusMessage = if (isEn) "${sorted.size} servers ready" else "${sorted.size} سرور آماده اتصال"
                     )
                 }
                 TrafficAlertWorker.schedule(this@MainActivity, url)
@@ -321,7 +346,7 @@ class MainActivity : ComponentActivity() {
                 TrafficAlertWorker.evaluateAndNotify(this@MainActivity, subInfo)
             } catch (e: Exception) {
                 VpnStateManager.update {
-                    it.copy(statusMessage = "خطا: ${e.localizedMessage ?: "لینک نامعتبر"}")
+                    it.copy(statusMessage = "${if (isEn) "Error" else "خطا"}: ${e.localizedMessage ?: "Invalid link"}")
                 }
             }
         }
@@ -343,7 +368,12 @@ class MainActivity : ComponentActivity() {
         if (nextEnabled) {
             val aiServers = current.servers.filter { it.isAiPro() }
             if (aiServers.isEmpty()) {
-                VpnStateManager.update { it.copy(aiProOnly = false, statusMessage = "سرور AI Pro یافت نشد") }
+                VpnStateManager.update {
+                    it.copy(
+                        aiProOnly = false,
+                        statusMessage = if (it.language == AppLanguage.EN) "No AI Pro server found" else "سرور AI Pro یافت نشد"
+                    )
+                }
                 return
             }
             val bestAi = aiServers.first()
