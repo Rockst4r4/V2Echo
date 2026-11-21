@@ -1,10 +1,13 @@
 {
-  "id": 1,
+  "id": 2,
   "active": true,
-  "title": "🎉 خوش آمدید به اکولایسنس",
-  "message": "برای تمدید اشتراک، پشتیبانی سریع و دریافت کدهای تخفیف وارد ربات ما شوید.",
-  "promo_code": "",
-  "button_text": "ورود به ربات",
+  "target": "all",
+  "push_notification": true,
+  "show_banner": true,
+  "title": "عنوان",
+  "message": "تست مسیج",
+  "promo_code": "renew",
+  "button_text": "OpenBot",
   "action_url": "https://t.me/echopress_bot",
   "bot_username": "echopress_bot"
 }
