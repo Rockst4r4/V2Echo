@@ -229,6 +229,7 @@ def build_singbox_config(
     split_mode: str,         # "bypass" or "only"
     split_apps: list[str],
     socks_port: int = 10808,
+    tun_stack: str = "system",
 ) -> dict:
     proxy_out = build_outbound(profile, mtu, mux_cfg)
     dns_remote = dns_server.strip()
@@ -259,11 +260,11 @@ def build_singbox_config(
                 "type": "tun",
                 "tag": "tun-in",
                 "interface_name": "EcholicenseTUN",
-                "inet4_address": "172.19.0.1/30",
+                "address": ["172.19.0.1/30"],
                 "mtu": max(1200, min(1500, int(mtu))),
                 "auto_route": True,
-                "strict_route": True,
-                "stack": "system",
+                "strict_route": False,
+                "stack": tun_stack,
                 "sniff": True,
             }
         )
@@ -290,7 +291,7 @@ def build_singbox_config(
             route_rules.append({"process_name": clean_apps, "outbound": "direct"})
 
     return {
-        "log": {"level": "warn", "timestamp": True},
+        "log": {"level": "warn", "timestamp": True, "disable_color": True},
         "dns": {
             "servers": [
                 {"tag": "remote", "address": dns_remote, "address_resolver": "local", "detour": "proxy"},

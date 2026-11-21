@@ -31,6 +31,24 @@ APP_NAME = "EcholicenseVPN"
 APP_VERSION = "1.0.0"
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
+
+ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text or "").strip()
+
+
+def find_free_port(preferred: int = 10808) -> int:
+    for port in [preferred] + list(range(10809, 10890)):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    return preferred
+
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 PROXY_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 KILLSWITCH_PREFIX = "EcholicenseKillSwitch"
@@ -255,6 +273,9 @@ class EcholicenseApi:
         self._data_dir = get_data_dir()
         self._state_file = self._data_dir / "state.json"
         self._proc: subprocess.Popen | None = None
+        self._log_fh = None
+        self._log_file = self._data_dir / 'core.log'
+        self._active_port = SOCKS_PORT
         self._connected_at = 0.0
         self._last_net = psutil.net_io_counters()
         self._last_net_ts = time.time()
@@ -338,7 +359,7 @@ class EcholicenseApi:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PROXY_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
                 winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 1 if enabled else 0)
                 if enabled:
-                    winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, f"127.0.0.1:{SOCKS_PORT}")
+                    winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, f"127.0.0.1:{self._active_port}")
                     winreg.SetValueEx(key, "ProxyOverride", 0, winreg.REG_SZ, "localhost;127.*;10.*;192.168.*;*.ir;<local>")
         except Exception:
             pass
@@ -508,40 +529,74 @@ class EcholicenseApi:
         self._state["activeDns"] = dns_name
         self._state["mtu"] = mtu
 
-        cfg = build_singbox_config(
-            profile=srv,
-            mode=self._state.get("mode", "tun"),
-            dns_server=dns_addr,
-            mtu=mtu,
-            iran_split=bool(self._state.get("iranSplit", True)),
-            adblock=bool(self._state.get("adBlocker", True)),
-            mux_cfg=self._state.get("mux", {}),
-            split_mode=self._state.get("splitMode", "bypass"),
-            split_apps=self._state.get("splitApps", []),
-            socks_port=SOCKS_PORT,
-        )
-
+        self._active_port = find_free_port(SOCKS_PORT)
+        mode = self._state.get("mode", "tun")
+        stacks_to_try = ["system", "mixed"] if mode == "tun" else ["system"]
         cfg_path = self._data_dir / "active_config.json"
-        cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
         if self._state.get("killSwitch"):
             self._apply_killswitch_rules(srv["host"])
 
-        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        self._proc = subprocess.Popen(
-            [str(singbox_bin), "run", "-c", str(cfg_path)],
-            cwd=str(get_app_dir()),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=flags,
-        )
-        time.sleep(0.9)
-        if self._proc.poll() is not None:
-            err = (self._proc.stderr.read() or b"").decode(errors="ignore").strip().splitlines()
-            msg = err[-1] if err else "Core failed to start (run as Admin for TUN)"
+        last_err = "Core failed to start (run as Admin for TUN)"
+        started = False
+
+        for stack in stacks_to_try:
+            cfg = build_singbox_config(
+                profile=srv,
+                mode=mode,
+                dns_server=dns_addr,
+                mtu=mtu,
+                iran_split=bool(self._state.get("iranSplit", True)),
+                adblock=bool(self._state.get("adBlocker", True)),
+                mux_cfg=self._state.get("mux", {}),
+                split_mode=self._state.get("splitMode", "bypass"),
+                split_apps=self._state.get("splitApps", []),
+                socks_port=self._active_port,
+                tun_stack=stack,
+            )
+            cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+            if self._log_fh:
+                try:
+                    self._log_fh.close()
+                except Exception:
+                    pass
+                self._log_fh = None
+
+            self._log_fh = open(self._log_file, "w", encoding="utf-8", errors="replace")
+            self._proc = subprocess.Popen(
+                [str(singbox_bin), "run", "-c", str(cfg_path)],
+                cwd=str(get_app_dir()),
+                stdout=self._log_fh,
+                stderr=subprocess.STDOUT,
+                creationflags=flags,
+            )
+            time.sleep(1.2)
+            if self._proc.poll() is None:
+                started = True
+                break
+
+            try:
+                self._log_fh.flush()
+                self._log_fh.close()
+            except Exception:
+                pass
+            self._log_fh = None
             self._proc = None
+
+            raw_log = ""
+            try:
+                raw_log = strip_ansi(self._log_file.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                pass
+            lines = [ln.strip() for ln in raw_log.splitlines() if ln.strip()]
+            if lines:
+                last_err = lines[-1]
+
+        if not started:
             self._state["connectionState"] = "ERROR"
-            self._state["statusMessage"] = msg[:95]
+            self._state["statusMessage"] = last_err
             return self.get_state()
 
         if self._state.get("mode") == "proxy":
@@ -567,6 +622,12 @@ class EcholicenseApi:
                 except Exception:
                     pass
             self._proc = None
+        if self._log_fh:
+            try:
+                self._log_fh.close()
+            except Exception:
+                pass
+            self._log_fh = None
         self._set_windows_proxy(False)
         if not keep_killswitch and not self._state.get("killSwitch"):
             self._clear_killswitch_rules()
@@ -759,6 +820,14 @@ class EcholicenseApi:
         self._state["announcement"] = None
         self._save_state()
         return self.get_state()
+
+    def get_logs(self) -> str:
+        try:
+            if self._log_file.exists():
+                return strip_ansi(self._log_file.read_text(encoding="utf-8", errors="ignore")) or "No logs yet."
+        except Exception as exc:
+            return f"Failed to read logs: {exc}"
+        return "No logs yet."
 
     def open_url(self, url: str):
         webbrowser.open(url)

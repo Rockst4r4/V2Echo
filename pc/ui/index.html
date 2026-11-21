@@ -162,7 +162,7 @@ input[type="text"], input[type="number"], textarea {
     </svg>
     <div>
       <h1>Echolicense <span style="font-size:10px;color:var(--cyan)">v1.0</span></h1>
-      <div class="sub" id="statusMsg">Ready to connect</div>
+      <div class="sub click" id="statusMsg" title="Click to view core logs" onclick="openLogsModal()">Ready to connect</div>
     </div>
   </div>
   <div class="top-actions">
@@ -350,6 +350,16 @@ input[type="text"], input[type="number"], textarea {
       <button class="btn btn-outline" style="width:auto;padding:6px 14px" onclick="toggleLang()" id="langBtn">English / فارسی</button>
     </div>
     <div style="font-size:10px;color:var(--muted);margin-top:8px" id="hwidText">HWID: ...</div>
+  </div>
+</div>
+
+
+<!-- Core Logs Modal -->
+<div class="modal-bg" id="logsModal">
+  <div class="modal">
+    <h2><span>📄 Core Logs</span><span class="click" onclick="closeModal('logsModal')">✕</span></h2>
+    <pre id="logsContent" style="white-space:pre-wrap;word-break:break-word;font-size:11px;color:#cbd5e1;background:rgba(0,0,0,0.35);padding:10px;border-radius:12px;max-height:300px;overflow-y:auto;margin-bottom:10px"></pre>
+    <button class="btn btn-outline" onclick="copyLogs()">Copy Logs</button>
   </div>
 </div>
 
@@ -550,6 +560,13 @@ async function dismissBanner() {
 }
 function openBot() { pywebview.api.open_url(`https://t.me/${S.botUsername || 'echopress_bot'}`); }
 function openExternal(url) { if (url) pywebview.api.open_url(url); }
+async function openLogsModal() {
+  document.getElementById('logsContent').textContent = await pywebview.api.get_logs();
+  openModal('logsModal');
+}
+function copyLogs() {
+  navigator.clipboard.writeText(document.getElementById('logsContent').textContent || '');
+}
 
 window.addEventListener('pywebviewready', async () => {
   render(await pywebview.api.get_state());
