@@ -249,7 +249,10 @@ class EcholicenseVpnService : VpnService() {
             delay(1400)
             while (isActive && VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
                 val directDeferred = async(Dispatchers.IO) {
-                    LivePingMonitor.probeDirect1111 { sock -> runCatching { protect(sock) } }
+                    LivePingMonitor.probeDirect1111(
+                        tcpProtector = { sock -> runCatching { protect(sock) } },
+                        udpProtector = { ds -> runCatching { protect(ds) } }
+                    )
                 }
                 val vpnDeferred = async(Dispatchers.IO) {
                     LivePingMonitor.probeViaLocalHttpProxy(probePort)

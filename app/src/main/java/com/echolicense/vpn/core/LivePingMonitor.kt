@@ -1,6 +1,9 @@
 package com.echolicense.vpn.core
 
 import java.io.BufferedInputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.math.abs
@@ -17,7 +20,7 @@ data class PingQualityReport(
 
 object LivePingMonitor {
 
-    private const val TIMEOUT_MS = 1800
+    private const val TIMEOUT_MS = 1400
 
     private fun readHttpHeaders(input: BufferedInputStream): String? {
         val sb = StringBuilder(256)
@@ -53,40 +56,22 @@ object LivePingMonitor {
         return if (sb.isNotEmpty()) sb.toString() else null
     }
 
-    /**
-     * پینگ مستقیم از اینترنت خام کاربر (خارج از تونل VPN) به 1.1.1.1
-     */
-    fun probeDirect1111(protector: ((Socket) -> Unit)? = null): Int {
+    private fun probeTcpConnect(
+        host: String,
+        port: Int,
+        timeoutMs: Int,
+        tcpProtector: ((Socket) -> Unit)?
+    ): Int {
         var sock: Socket? = null
         return try {
             sock = Socket()
-            protector?.invoke(sock)
-            sock.soTimeout = TIMEOUT_MS
+            runCatching { sock.bind(InetSocketAddress(0)) }
+            tcpProtector?.invoke(sock)
+            sock.soTimeout = timeoutMs
             sock.tcpNoDelay = true
-
-            val tConn0 = System.nanoTime()
-            sock.connect(InetSocketAddress("1.1.1.1", 80), TIMEOUT_MS)
-            val tcpRttMs = ((System.nanoTime() - tConn0) / 1_000_000L).toInt().coerceAtLeast(1)
-
-            val out = sock.getOutputStream()
-            val inp = BufferedInputStream(sock.getInputStream())
-
-            // درخواست اول برای آماده‌سازی اتصال
-            out.write("HEAD /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: keep-alive\r\n\r\n".toByteArray())
-            out.flush()
-            val h1 = readHttpHeaders(inp) ?: return tcpRttMs
-
-            // درخواست دوم روی همان سوکت برای اندازه‌گیری دقیق ۱-RTT واقعی
-            if (!h1.contains("connection: close", ignoreCase = true)) {
-                val t0 = System.nanoTime()
-                out.write("HEAD /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n".toByteArray())
-                out.flush()
-                val line2 = readFirstLine(inp)
-                if (!line2.isNullOrBlank() && line2.startsWith("HTTP/")) {
-                    return ((System.nanoTime() - t0) / 1_000_000L).toInt().coerceIn(1, 3000)
-                }
-            }
-            tcpRttMs.coerceIn(1, 3000)
+            val t0 = System.nanoTime()
+            sock.connect(InetSocketAddress(host, port), timeoutMs)
+            ((System.nanoTime() - t0) / 1_000_000L).toInt().coerceIn(1, 3000)
         } catch (_: Throwable) {
             -1
         } finally {
@@ -94,37 +79,107 @@ object LivePingMonitor {
         }
     }
 
+    private fun probeUdpDns(
+        host: String,
+        timeoutMs: Int,
+        udpProtector: ((DatagramSocket) -> Unit)?
+    ): Int {
+        var ds: DatagramSocket? = null
+        return try {
+            val query = byteArrayOf(
+                0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x03, 'o'.code.toByte(), 'n'.code.toByte(), 'e'.code.toByte(),
+                0x03, 'o'.code.toByte(), 'n'.code.toByte(), 'e'.code.toByte(),
+                0x03, 'o'.code.toByte(), 'n'.code.toByte(), 'e'.code.toByte(),
+                0x03, 'o'.code.toByte(), 'n'.code.toByte(), 'e'.code.toByte(),
+                0x00, 0x00, 0x01, 0x00, 0x01
+            )
+            ds = DatagramSocket()
+            udpProtector?.invoke(ds)
+            ds.soTimeout = timeoutMs
+            val addr = InetAddress.getByName(host)
+            val req = DatagramPacket(query, query.size, addr, 53)
+            val respBuf = ByteArray(256)
+            val resp = DatagramPacket(respBuf, respBuf.size)
+            val t0 = System.nanoTime()
+            ds.send(req)
+            ds.receive(resp)
+            if (resp.length >= 12 && respBuf[0] == 0x12.toByte() && respBuf[1] == 0x34.toByte()) {
+                ((System.nanoTime() - t0) / 1_000_000L).toInt().coerceIn(1, 3000)
+            } else {
+                -1
+            }
+        } catch (_: Throwable) {
+            -1
+        } finally {
+            runCatching { ds?.close() }
+        }
+    }
+
+    private fun probeIcmp1111(): Int {
+        return try {
+            val proc = ProcessBuilder("/system/bin/ping", "-c", "1", "-W", "2", "1.1.1.1")
+                .redirectErrorStream(true)
+                .start()
+            val out = proc.inputStream.bufferedReader().use { it.readText() }
+            proc.waitFor()
+            val m = Regex("time[=<]\\s*([0-9.]+)\\s*ms", RegexOption.IGNORE_CASE).find(out)
+            m?.groupValues?.get(1)?.toDoubleOrNull()?.roundToInt()?.coerceIn(1, 3000) ?: -1
+        } catch (_: Throwable) {
+            -1
+        }
+    }
+
     /**
-     * پینگ واقعی به 1.1.1.1 از داخل هسته VPN (از طریق inbound محلی probe-http)
+     * پینگ مستقیم از اینترنت خام کاربر (خارج از تونل VPN)
      */
-    fun probeViaLocalHttpProxy(port: Int): Int {
-        if (port <= 0) return -1
+    fun probeDirect1111(
+        tcpProtector: ((Socket) -> Unit)? = null,
+        udpProtector: ((DatagramSocket) -> Unit)? = null
+    ): Int {
+        val r1 = probeTcpConnect("1.1.1.1", 443, TIMEOUT_MS, tcpProtector)
+        if (r1 > 0) return r1
+
+        val r2 = probeTcpConnect("1.0.0.1", 443, TIMEOUT_MS, tcpProtector)
+        if (r2 > 0) return r2
+
+        val r3 = probeTcpConnect("8.8.8.8", 443, TIMEOUT_MS, tcpProtector)
+        if (r3 > 0) return r3
+
+        val r4 = probeUdpDns("1.1.1.1", TIMEOUT_MS, udpProtector)
+        if (r4 > 0) return r4
+
+        val icmp = probeIcmp1111()
+        if (icmp > 0) return icmp
+
+        return probeTcpConnect("1.1.1.1", 80, TIMEOUT_MS, tcpProtector)
+    }
+
+    private fun probeProxyTarget(port: Int, host: String, path: String): Int {
         var sock: Socket? = null
         return try {
             sock = Socket()
-            sock.soTimeout = TIMEOUT_MS + 700
+            sock.soTimeout = TIMEOUT_MS + 900
             sock.tcpNoDelay = true
             sock.connect(InetSocketAddress("127.0.0.1", port), 1000)
 
             val out = sock.getOutputStream()
             val inp = BufferedInputStream(sock.getInputStream())
 
-            out.write("CONNECT 1.1.1.1:80 HTTP/1.1\r\nHost: 1.1.1.1:80\r\n\r\n".toByteArray())
+            out.write("CONNECT $host:80 HTTP/1.1\r\nHost: $host:80\r\n\r\n".toByteArray())
             out.flush()
             val connResp = readHttpHeaders(inp) ?: return -1
             if (!connResp.contains("200")) return -1
 
-            // درخواست اول تونل ریموت را باز می‌کند
             val tFirst0 = System.nanoTime()
-            out.write("HEAD /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: keep-alive\r\n\r\n".toByteArray())
+            out.write("HEAD $path HTTP/1.1\r\nHost: $host\r\nConnection: keep-alive\r\n\r\n".toByteArray())
             out.flush()
             val h1 = readHttpHeaders(inp) ?: return -1
             val firstMs = ((System.nanoTime() - tFirst0) / 1_000_000L).toInt().coerceAtLeast(1)
 
-            // درخواست دوم پینگ دقیق ۱-RTT از داخل VPN تا 1.1.1.1 را اندازه می‌گیرد
             if (!h1.contains("connection: close", ignoreCase = true)) {
                 val t0 = System.nanoTime()
-                out.write("HEAD /cdn-cgi/trace HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n".toByteArray())
+                out.write("HEAD $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n".toByteArray())
                 out.flush()
                 val line2 = readFirstLine(inp)
                 if (!line2.isNullOrBlank() && line2.startsWith("HTTP/")) {
@@ -137,6 +192,13 @@ object LivePingMonitor {
         } finally {
             runCatching { sock?.close() }
         }
+    }
+
+    fun probeViaLocalHttpProxy(port: Int): Int {
+        if (port <= 0) return -1
+        val r1 = probeProxyTarget(port, "1.1.1.1", "/cdn-cgi/trace")
+        if (r1 > 0) return r1
+        return probeProxyTarget(port, "cp.cloudflare.com", "/generate_204")
     }
 
     fun computeJitter(samples: List<Int>): Int {

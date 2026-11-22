@@ -1,6 +1,7 @@
 import atexit
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -297,6 +298,7 @@ class EcholicenseApi:
         self._quitting = False
         self._last_tray_sig = None
         self._phys_gw = None
+        self._direct_route_active = False
         self._ping_lock = threading.Lock()
         self._direct_hist: list[int] = []
         self._vpn_hist: list[int] = []
@@ -469,17 +471,24 @@ class EcholicenseApi:
         if not priv_key or not pub_key or not endpoint:
             return None
         dns_clean = dns_ip if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", dns_ip) else "1.1.1.1"
+        allowed_nets = [
+            str(n)
+            for n in ipaddress.IPv4Network("0.0.0.0/0").address_exclude(
+                ipaddress.IPv4Network("1.0.0.1/32")
+            )
+        ]
+        alt_dns = "8.8.8.8" if dns_clean != "8.8.8.8" else "1.1.1.1"
         lines = [
             "[Interface]",
             f"PrivateKey = {priv_key}",
             f"Address = {', '.join(addrs) if addrs else '10.0.0.2/32'}",
-            f"DNS = {dns_clean}, 1.0.0.1",
+            f"DNS = {dns_clean}, {alt_dns}",
             f"MTU = {max(1200, min(1500, int(mtu)))}",
             "",
             "[Peer]",
             f"PublicKey = {pub_key}",
             f"Endpoint = {endpoint}",
-            "AllowedIPs = 0.0.0.0/0",
+            f"AllowedIPs = {', '.join(allowed_nets)}",
             "PersistentKeepalive = 25",
         ]
         if psk:
@@ -625,6 +634,7 @@ class EcholicenseApi:
             return None
 
     def _add_direct_probe_route(self):
+        self._direct_route_active = False
         if os.name != "nt":
             return
         try:
@@ -635,11 +645,13 @@ class EcholicenseApi:
                 cmd = ["route", "add", "1.0.0.1", "mask", "255.255.255.255", gw, "metric", "1"]
                 if self._phys_if_index:
                     cmd.extend(["IF", str(self._phys_if_index)])
-                self._run_hidden(cmd)
+                rc = self._run_hidden(cmd)
+                self._direct_route_active = (rc == 0)
         except Exception:
-            pass
+            self._direct_route_active = False
 
     def _remove_direct_probe_route(self):
+        self._direct_route_active = False
         if os.name != "nt":
             return
         try:
@@ -671,7 +683,117 @@ class EcholicenseApi:
                 break
         return bytes(buf)
 
-    def _probe_http_rtt(self, target_ip: str, proxy_port: int | None = None, timeout: float = 1.8) -> int:
+    @staticmethod
+    def _probe_tcp_connect(target_ip: str, port: int = 443, timeout: float = 1.3, bind_ip: str | None = None) -> int:
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            if bind_ip:
+                try:
+                    sock.bind((bind_ip, 0))
+                except Exception:
+                    pass
+            t0 = time.perf_counter()
+            sock.connect((target_ip, port))
+            return max(1, min(3000, int((time.perf_counter() - t0) * 1000)))
+        except Exception:
+            return -1
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _probe_udp_dns(target_ip: str, timeout: float = 1.3, bind_ip: str | None = None) -> int:
+        sock = None
+        try:
+            query = (
+                b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+                b"\x03one\x03one\x03one\x03one\x00\x00\x01\x00\x01"
+            )
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
+            if bind_ip:
+                try:
+                    sock.bind((bind_ip, 0))
+                except Exception:
+                    pass
+            t0 = time.perf_counter()
+            sock.sendto(query, (target_ip, 53))
+            data, _ = sock.recvfrom(256)
+            if len(data) >= 12 and data[:2] == b"\x12\x34":
+                return max(1, min(3000, int((time.perf_counter() - t0) * 1000)))
+            return -1
+        except Exception:
+            return -1
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _probe_icmp_windows(target_ip: str, timeout_ms: int = 1200, bind_ip: str | None = None) -> int:
+        if os.name != "nt":
+            return -1
+        try:
+            flags = subprocess.CREATE_NO_WINDOW
+            cmd = ["ping", "-n", "1", "-w", str(timeout_ms)]
+            if bind_ip:
+                cmd.extend(["-S", bind_ip])
+            cmd.append(target_ip)
+            out = subprocess.check_output(
+                cmd,
+                text=True,
+                errors="ignore",
+                creationflags=flags,
+                timeout=2.2,
+            )
+            for line in out.splitlines():
+                if "ttl=" in line.lower():
+                    m = re.search(r"[=<]\s*(\d+)\s*ms", line, re.I)
+                    if m:
+                        return max(1, min(3000, int(m.group(1))))
+            return -1
+        except Exception:
+            return -1
+
+    def _probe_direct_ping(self, in_tun: bool) -> int:
+        if not in_tun:
+            ms = self._probe_tcp_connect("1.1.1.1", 443)
+            if ms > 0:
+                return ms
+            ms = self._probe_icmp_windows("1.1.1.1")
+            if ms > 0:
+                return ms
+            for ip, port in (("1.0.0.1", 443), ("8.8.8.8", 443)):
+                ms = self._probe_tcp_connect(ip, port)
+                if ms > 0:
+                    return ms
+            ms = self._probe_udp_dns("1.1.1.1")
+            if ms > 0:
+                return ms
+            return self._probe_tcp_connect("1.1.1.1", 80)
+
+        # در حالت TUN: 1.0.0.1 از تونل استثنا شده و مستقیم از کارت شبکه فیزیکی خارج می‌شود
+        bip = self._phys_ip
+        ms = self._probe_tcp_connect("1.0.0.1", 443, bind_ip=bip)
+        if ms > 0:
+            return ms
+        ms = self._probe_icmp_windows("1.0.0.1", bind_ip=bip)
+        if ms > 0:
+            return ms
+        ms = self._probe_udp_dns("1.0.0.1", bind_ip=bip)
+        if ms > 0:
+            return ms
+        return self._probe_tcp_connect("1.0.0.1", 80, bind_ip=bip)
+
+    def _probe_http_rtt(self, target_ip: str, proxy_port: int | None = None, timeout: float = 1.8, path: str = "/cdn-cgi/trace") -> int:
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -691,7 +813,7 @@ class EcholicenseApi:
                 tcp_ms = max(1, int((time.perf_counter() - t_c0) * 1000))
 
             t_f0 = time.perf_counter()
-            sock.sendall(f"HEAD /cdn-cgi/trace HTTP/1.1\r\nHost: {target_ip}\r\nConnection: keep-alive\r\n\r\n".encode())
+            sock.sendall(f"HEAD {path} HTTP/1.1\r\nHost: {target_ip}\r\nConnection: keep-alive\r\n\r\n".encode())
             h1 = self._read_http_headers(sock)
             first_ms = max(1, int((time.perf_counter() - t_f0) * 1000))
             if not h1:
@@ -699,7 +821,7 @@ class EcholicenseApi:
 
             if b"connection: close" not in h1.lower():
                 t0 = time.perf_counter()
-                sock.sendall(f"HEAD /cdn-cgi/trace HTTP/1.1\r\nHost: {target_ip}\r\nConnection: close\r\n\r\n".encode())
+                sock.sendall(f"HEAD {path} HTTP/1.1\r\nHost: {target_ip}\r\nConnection: close\r\n\r\n".encode())
                 l2 = self._read_first_line(sock)
                 if l2.startswith(b"HTTP/"):
                     return max(1, min(3000, int((time.perf_counter() - t0) * 1000)))
@@ -715,6 +837,21 @@ class EcholicenseApi:
                     sock.close()
                 except Exception:
                     pass
+
+    def _probe_vpn_ping(self, mode: str) -> int:
+        if mode == "proxy":
+            ms = self._probe_http_rtt("1.1.1.1", proxy_port=self._active_port)
+            if ms > 0:
+                return ms
+            return self._probe_http_rtt("cp.cloudflare.com", proxy_port=self._active_port, path="/generate_204")
+
+        ms = self._probe_http_rtt("1.1.1.1")
+        if ms > 0:
+            return ms
+        ms = self._probe_http_rtt("cp.cloudflare.com", path="/generate_204")
+        if ms > 0:
+            return ms
+        return self._probe_udp_dns("1.1.1.1")
 
     @staticmethod
     def _calc_jitter(samples: list[int]) -> int:
@@ -771,7 +908,7 @@ class EcholicenseApi:
         return {"score": 26, "level": "poor", "fa": "پینگ VPN بالاست", "en": "VPN: High Ping", "deltaMs": None, "deltaJitter": None}
 
     def _live_ping_loop(self):
-        time.sleep(1.2)
+        time.sleep(0.4)
         while not self._quitting:
             try:
                 is_conn = self._state.get("connectionState") == "CONNECTED"
@@ -779,15 +916,15 @@ class EcholicenseApi:
 
                 if not is_conn:
                     self._phys_gw = self._detect_default_gateway() or self._phys_gw
-                    d_ms = self._probe_http_rtt("1.1.1.1")
+                    d_ms = self._probe_direct_ping(in_tun=False)
                     v_ms = -1
                     self._vpn_hist = []
                 elif mode == "proxy":
-                    d_ms = self._probe_http_rtt("1.1.1.1")
-                    v_ms = self._probe_http_rtt("1.1.1.1", proxy_port=self._active_port)
+                    d_ms = self._probe_direct_ping(in_tun=False)
+                    v_ms = self._probe_vpn_ping("proxy")
                 else:
-                    v_ms = self._probe_http_rtt("1.1.1.1")
-                    d_ms = self._probe_http_rtt("1.0.0.1")
+                    v_ms = self._probe_vpn_ping("tun")
+                    d_ms = self._probe_direct_ping(in_tun=True)
 
                 if d_ms > 0:
                     self._direct_hist = (self._direct_hist + [d_ms])[-12:]
@@ -1064,6 +1201,9 @@ class EcholicenseApi:
         last_err = "Core failed to start (run as Admin for TUN)"
         started = False
 
+        if mode == "tun":
+            self._add_direct_probe_route()
+
         for stack in stacks_to_try:
             cfg = build_singbox_config(
                 profile=srv,
@@ -1079,9 +1219,19 @@ class EcholicenseApi:
                 tun_stack=stack,
                 app_dir=str(get_app_dir()),
             )
-            if isinstance(cfg, dict) and isinstance(cfg.get("route"), dict):
-                rules = cfg["route"].setdefault("rules", [])
-                rules.insert(0, {"ip_cidr": ["1.0.0.1/32"], "port": [80, 443], "outbound": "direct"})
+            if isinstance(cfg, dict):
+                for inb in cfg.get("inbounds", []):
+                    if isinstance(inb, dict) and inb.get("type") == "tun":
+                        if "route_exclude_address" in inb:
+                            if "1.0.0.1/32" not in inb["route_exclude_address"]:
+                                inb["route_exclude_address"].append("1.0.0.1/32")
+                        else:
+                            excl = inb.setdefault("inet4_route_exclude_address", [])
+                            if "1.0.0.1/32" not in excl:
+                                excl.append("1.0.0.1/32")
+                if isinstance(cfg.get("route"), dict):
+                    rules = cfg["route"].setdefault("rules", [])
+                    rules.insert(0, {"ip_cidr": ["1.0.0.1/32"], "outbound": "direct"})
             cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
             if self._log_fh:
