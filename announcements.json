@@ -1,11 +1,11 @@
 {
-  "id": 5,
+  "id": 6,
   "active": true,
   "target": "all",
   "push_notification": true,
   "show_banner": true,
   "title": "تخفیف ویژه اکولایسنس فعال شد 🎁",
-  "message": "برای تمدید یا خرید اشتراک جدید می‌تونید از کد تخفیف زیر داخل ربات تلگرام استفاده کنید:",
+  "message": "برای خرید یا تمدید اشتراک می‌تونید از کد تخفیف newapp داخل ربات تلگرام استفاده کنید.",
   "promo_code": "newapp",
   "button_text": "ورود به ربات",
   "action_url": "https://t.me/echopress_bot",
