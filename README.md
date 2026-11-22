@@ -19,15 +19,15 @@
 
 ---
 
-## Downloads (v1.8 Official Release)
+## Downloads (v1.9 Official Release)
 
 Download the latest signed binaries from **[GitHub Releases](https://github.com/Rockst4r4/V2Echo/releases/latest)**:
 
 | Platform | File | Notes |
 |---|---|---|
-| **Android (APK)** | `Echolicense-Android-v1.8.apk` | Signed Release APK (Android 8.0+ / API 26+) |
-| **Android (Play Store)** | `Echolicense-Android-v1.8.aab` | Signed App Bundle ready for Google Play Console |
-| **Windows PC (64-bit)** | `Echolicense-Windows-v1.8.zip` | Portable package (`EcholicenseVPN.exe` + `sing-box` + `Wintun` + `WireGuard-NT`) |
+| **Android (APK)** | `Echolicense-Android-v1.9.apk` | Signed Release APK (Android 8.0+ / API 26+) |
+| **Android (Play Store)** | `Echolicense-Android-v1.9.aab` | Signed App Bundle ready for Google Play Console |
+| **Windows PC (64-bit)** | `Echolicense-Windows-v1.9.zip` | Portable package (`EcholicenseVPN.exe` + `sing-box` + `Wintun` + `WireGuard-NT`) |
 
 ---
 
@@ -59,12 +59,12 @@ Download the latest signed binaries from **[GitHub Releases](https://github.com/
 ## Quick Start
 
 ### Android
-1. Install `Echolicense-Android-v1.8.apk` *(uninstall any older Debug build first)*.
+1. Install `Echolicense-Android-v1.9.apk` *(uninstall any older Debug build first)*.
 2. Tap **Subs** or the **QR Scanner** icon to import your subscription link, `vless://` URI, or WireGuard config.
 3. Tap the central power button to connect, or add the **Echolicense** tile to your Quick Settings panel.
 
 ### Windows PC
-1. Extract all files from `Echolicense-Windows-v1.8.zip` into a folder.
+1. Extract all files from `Echolicense-Windows-v1.9.zip` into a folder.
 2. Run `EcholicenseVPN.exe` and accept Administrator privileges *(required for TUN Mode, WireGuard-NT, and KillSwitch)*.
 3. Open **Subs** to add your subscription link, choose **TUN Mode** or **System Proxy**, and click the power button.
 4. Click the status text under **Echolicense** anytime to inspect or copy live core logs.

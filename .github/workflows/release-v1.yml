@@ -1,4 +1,4 @@
-name: Echolicense v1.8 Official Release (Android + PC)
+name: Echolicense v1.9 Official Release (Android + PC)
 
 on:
   push:
@@ -38,7 +38,6 @@ jobs:
               l, t = (img.width - side) // 2, (img.height - side) // 2
               sq = img.crop((l, t, l + side, t + side))
 
-              # حاشیه بسیار ظریف همرنگ پس‌زمینه تا در قاب گرد/مربعی One UI لبه‌های لوگو بریده نشوند
               bg_color = sq.getpixel((4, 4))
               pad = int(side * 0.06)
               canvas = Image.new("RGBA", (side + pad * 2, side + pad * 2), bg_color)
@@ -108,16 +107,16 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           gradle assembleRelease bundleRelease
-          cp app/build/outputs/apk/release/app-release.apk Echolicense-Android-v1.8.apk
-          cp app/build/outputs/bundle/release/app-release.aab Echolicense-Android-v1.8.aab
+          cp app/build/outputs/apk/release/app-release.apk Echolicense-Android-v1.9.apk
+          cp app/build/outputs/bundle/release/app-release.aab Echolicense-Android-v1.9.aab
 
       - name: Upload Android Release Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Echolicense-Android-v1.8
+          name: Echolicense-Android-v1.9
           path: |
-            Echolicense-Android-v1.8.apk
-            Echolicense-Android-v1.8.aab
+            Echolicense-Android-v1.9.apk
+            Echolicense-Android-v1.9.aab
 
   build-windows-pc:
     runs-on: windows-latest
@@ -158,7 +157,7 @@ jobs:
           try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs" -OutFile "geoip-ir.srs" } catch {}
           try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-ir.srs" -OutFile "geosite-ir.srs" } catch {}
 
-      - name: Build Windows EcholicenseVPN.exe
+      - name: Build Windows EcholicenseVPN.exe & Setup Installer
         shell: pwsh
         working-directory: pc
         run: |
@@ -170,13 +169,28 @@ jobs:
           foreach ($opt in @("wireguard.exe", "tunnel.dll", "wireguard.dll", "geoip-ir.srs", "geosite-ir.srs")) {
             if (Test-Path $opt) { Copy-Item $opt -Destination "release_pkg\" }
           }
-          Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v1.8.zip" -Force
+          Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v1.9.zip" -Force
+
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+            if ($cmd) {
+              $iscc = $cmd.Source
+            } else {
+              choco install innosetup -y --no-progress
+              $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+            }
+          }
+          & $iscc "/DAppVersion=1.9" "/DSourceDir=release_pkg" "/DOutputDir=.." "/DIconFile=assets\icon.ico" "installer.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows PC Release Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Echolicense-Windows-v1.8
-          path: Echolicense-Windows-v1.8.zip
+          name: Echolicense-Windows-v1.9
+          path: |
+            Echolicense-Windows-Setup-v1.9.exe
+            Echolicense-Windows-v1.9.zip
 
   publish-release:
     needs: [build-android, build-windows-pc]
@@ -186,16 +200,16 @@ jobs:
         with:
           path: release-files
 
-      - name: Publish Official GitHub Release v1.0.0
+      - name: Publish Official GitHub Release v1.9
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.8
-          name: "Echolicense VPN v1.8 (Android + Windows PC)"
+          tag_name: v1.9
+          name: "Echolicense VPN v1.9 (Android + Windows PC)"
           body: |
-            ## Echolicense VPN v1.8 Official Release
-            - **Android**: Signed Release APK (`Echolicense-Android-v1.8.apk`) & Google Play AAB (`Echolicense-Android-v1.8.aab`)
-            - **Windows PC**: Portable Release (`Echolicense-Windows-v1.8.zip`) with System Proxy, Real-Ping TUN Mode, KillSwitch, Startup App, Auto-Connect & Graphical Split Tunneling
-            - **New**: Custom Echolicense Brand Logo & Minimal Red Gaming Mode (WireGuard)
+            ## Echolicense VPN v1.9 Official Release
+            - **Windows PC Installer**: Official Setup (`Echolicense-Windows-Setup-v1.9.exe`) with Start Menu & Desktop shortcut + clean uninstall
+            - **Windows PC Portable**: Portable archive (`Echolicense-Windows-v1.9.zip`)
+            - **Android**: Signed Release APK (`Echolicense-Android-v1.9.apk`) & Google Play AAB (`Echolicense-Android-v1.9.aab`)
           files: |
-            release-files/Echolicense-Android-v1.8/*
-            release-files/Echolicense-Windows-v1.8/*
+            release-files/Echolicense-Android-v1.9/*
+            release-files/Echolicense-Windows-v1.9/*
