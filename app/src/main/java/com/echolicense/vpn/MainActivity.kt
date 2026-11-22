@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
         private const val KEY_MANUAL_DNS = "manual_dns"
         private const val KEY_LANG = "app_lang"
         private const val KEY_ADBLOCK = "adblock_enabled"
+        private const val KEY_LAN_MIRROR = "lan_mirror_bypass"
         private const val KEY_SUBS_JSON = "saved_subscriptions_json"
         private const val KEY_ACTIVE_SUB_ID = "active_subscription_id"
         private const val KEY_MUX_ENABLED = "mux_enabled"
@@ -120,6 +121,7 @@ class MainActivity : ComponentActivity() {
 
         val savedLang = if (prefs.getString(KEY_LANG, "en") == "fa") AppLanguage.FA else AppLanguage.EN
         val savedAdBlock = prefs.getBoolean(KEY_ADBLOCK, true)
+        val savedLanMirror = prefs.getBoolean(KEY_LAN_MIRROR, true)
         val savedMtu = prefs.getInt(KEY_MTU, 1360).coerceIn(1200, 1500)
         val savedAutoMtu = prefs.getBoolean(KEY_AUTO_MTU, true)
         val savedManualDns = prefs.getString(KEY_MANUAL_DNS, "").orEmpty()
@@ -145,6 +147,7 @@ class MainActivity : ComponentActivity() {
             it.copy(
                 language = savedLang,
                 adBlockerEnabled = savedAdBlock,
+                lanMirrorBypassEnabled = savedLanMirror,
                 mtu = savedMtu,
                 autoMtuEnabled = savedAutoMtu,
                 manualDns = savedManualDns,
@@ -194,6 +197,13 @@ class MainActivity : ComponentActivity() {
                     onSmartPingClick = { runSmartPing() },
                     onToggleIranSplit = { enabled ->
                         VpnStateManager.update { it.copy(iranSplitEnabled = enabled) }
+                    },
+                    onToggleLanMirrorBypass = { enabled ->
+                        prefs.edit().putBoolean(KEY_LAN_MIRROR, enabled).apply()
+                        VpnStateManager.update { it.copy(lanMirrorBypassEnabled = enabled) }
+                        if (VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
+                            dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
+                        }
                     },
                     onToggleAdBlocker = { enabled ->
                         prefs.edit().putBoolean(KEY_ADBLOCK, enabled).apply()

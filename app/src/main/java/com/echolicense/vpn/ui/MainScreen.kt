@@ -49,6 +49,7 @@ fun MainScreen(
     onSelectServer: (ServerProfile) -> Unit,
     onSmartPingClick: () -> Unit,
     onToggleIranSplit: (Boolean) -> Unit,
+    onToggleLanMirrorBypass: (Boolean) -> Unit,
     onToggleAdBlocker: (Boolean) -> Unit,
     onToggleAiPro: () -> Unit,
     onToggleGaming: () -> Unit,
@@ -395,6 +396,24 @@ fun MainScreen(
                             checked = uiState.iranSplitEnabled,
                             onCheckedChange = onToggleIranSplit,
                             colors = SwitchDefaults.colors(checkedTrackColor = EmeraldGlow)
+                        )
+                    }
+
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(vertical = 4.dp)) {
+                            Text(s.lanMirrorBypassTitle, color = Color.White, fontSize = 13.sp)
+                            Text(s.lanMirrorBypassSub, color = Color.White.copy(alpha = 0.6f), fontSize = 10.sp)
+                        }
+                        Switch(
+                            checked = uiState.lanMirrorBypassEnabled,
+                            onCheckedChange = onToggleLanMirrorBypass,
+                            colors = SwitchDefaults.colors(checkedTrackColor = CyanLiquid)
                         )
                     }
 

@@ -198,7 +198,28 @@ class EcholicenseVpnService : VpnService() {
             runCatching { builder.addDisallowedApplication(pkg) }
         }
 
-        tunInterface = builder.establish() ?: throw IllegalStateException("VpnService permission denied.")
+        tunInterface = builder.apply {
+                if (com.echolicense.vpn.core.VpnStateManager.state.value.lanMirrorBypassEnabled) {
+                    runCatching { allowBypass() }
+                    com.echolicense.vpn.data.IranSplitTunnel.getInstalledLanMirrorPackages(this@EcholicenseVpnService).forEach { pkg ->
+                        runCatching { addDisallowedApplication(pkg) }
+                    }
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        listOf(
+                            "10.0.0.0" to 8,
+                            "169.254.0.0" to 16,
+                            "172.16.0.0" to 12,
+                            "192.168.0.0" to 16,
+                            "224.0.0.0" to 4,
+                            "255.255.255.255" to 32
+                        ).forEach { (ip, prefix) ->
+                            runCatching {
+                                excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName(ip), prefix))
+                            }
+                        }
+                    }
+                }
+            }.establish() ?: throw IllegalStateException("VpnService permission denied.")
 
         Libv2ray.initCoreEnv(filesDir.absolutePath, "")
         val controller = Libv2ray.newCoreController(object : CoreCallbackHandler {

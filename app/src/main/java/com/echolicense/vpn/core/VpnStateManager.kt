@@ -19,6 +19,7 @@ data class VpnUiState(
     val activeDns: DnsProvider? = null,
     val manualDns: String = "",
     val iranSplitEnabled: Boolean = true,
+    val lanMirrorBypassEnabled: Boolean = true,
     val adBlockerEnabled: Boolean = true,
     val aiProOnly: Boolean = false,
     val gamingOnly: Boolean = false,
