@@ -43,6 +43,7 @@ class EcholicenseVpnService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
     private var coreController: CoreController? = null
     private var telemetryJob: Job? = null
+    private var pingJob: Job? = null
     private var connectJob: Job? = null
     private var notifJob: Job? = null
 
@@ -122,6 +123,7 @@ class EcholicenseVpnService : VpnService() {
                     )
                 }
 
+                val probePort = runCatching { java.net.ServerSocket(0).use { it.localPort } }.getOrDefault(10809)
                 val configJson = XrayConfigBuilder.buildConfigJson(
                     profile = server,
                     primaryDns = resolvedDns,
@@ -129,7 +131,8 @@ class EcholicenseVpnService : VpnService() {
                     enableAdBlocker = current.adBlockerEnabled,
                     mtu = finalMtu,
                     muxConfig = current.muxConfig,
-                    hasGeoFiles = hasGeoFiles
+                    hasGeoFiles = hasGeoFiles,
+                    probePort = probePort
                 )
                 startXrayTun(
                     configJson = configJson,
@@ -150,6 +153,7 @@ class EcholicenseVpnService : VpnService() {
                 val muxLabel = if (current.muxConfig.enabled) " • Mux" else ""
                 updateNotification("${server.name} • MTU: $finalMtu$muxLabel")
                 startTelemetryLoop()
+                startLivePingLoop(probePort)
 
             } catch (e: CancellationException) {
                 throw e
@@ -211,6 +215,7 @@ class EcholicenseVpnService : VpnService() {
 
     private fun startTelemetryLoop() {
         telemetryJob?.cancel()
+        pingJob?.cancel()
         telemetryJob = scope.launch {
             var lastRx = TrafficStats.getTotalRxBytes()
             var lastTx = TrafficStats.getTotalTxBytes()
@@ -233,6 +238,38 @@ class EcholicenseVpnService : VpnService() {
                         connectedSeconds = seconds
                     )
                 }
+            }
+        }
+    }
+
+
+    private fun startLivePingLoop(probePort: Int) {
+        pingJob?.cancel()
+        pingJob = scope.launch {
+            delay(1400)
+            while (isActive && VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
+                val directDeferred = async(Dispatchers.IO) {
+                    LivePingMonitor.probeDirect1111 { sock -> runCatching { protect(sock) } }
+                }
+                val vpnDeferred = async(Dispatchers.IO) {
+                    LivePingMonitor.probeViaLocalHttpProxy(probePort)
+                }
+                val dMs = directDeferred.await()
+                val vMs = vpnDeferred.await()
+
+                VpnStateManager.update { st ->
+                    val nextDirectHist = if (dMs > 0) (st.directPingHistory + dMs).takeLast(12) else st.directPingHistory
+                    val nextVpnHist = if (vMs > 0) (st.vpnPingHistory + vMs).takeLast(12) else st.vpnPingHistory
+                    st.copy(
+                        directPingMs = dMs,
+                        directJitterMs = LivePingMonitor.computeJitter(nextDirectHist),
+                        directPingHistory = nextDirectHist,
+                        vpnPingMs = vMs,
+                        vpnJitterMs = LivePingMonitor.computeJitter(nextVpnHist),
+                        vpnPingHistory = nextVpnHist
+                    )
+                }
+                delay(2500)
             }
         }
     }

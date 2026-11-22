@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.echolicense.vpn.core.LivePingMonitor
 import com.echolicense.vpn.core.VpnUiState
 import com.echolicense.vpn.data.*
 import com.echolicense.vpn.ui.theme.*
@@ -360,6 +361,11 @@ fun MainScreen(
                     }
                 }
             }
+
+            Spacer(Modifier.height(12.dp))
+
+            // 7.5 نوار تست لحظه‌ای پینگ 1.1.1.1 و سنجش کیفیت اینترنت
+            LivePingQualityCard(uiState = uiState)
 
             Spacer(Modifier.height(12.dp))
 
@@ -1303,6 +1309,211 @@ private fun ModeMiniCard(
                     .padding(horizontal = 7.dp, vertical = 3.dp)
             ) {
                 Text(badge, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun LivePingQualityCard(uiState: VpnUiState) {
+    val isFa = uiState.language == AppLanguage.FA
+    val isConnected = uiState.connectionState == ConnectionState.CONNECTED
+    val report = LivePingMonitor.evaluateQuality(
+        isConnected = isConnected,
+        directPingMs = uiState.directPingMs,
+        directJitterMs = uiState.directJitterMs,
+        vpnPingMs = uiState.vpnPingMs,
+        vpnJitterMs = uiState.vpnJitterMs
+    )
+    val qualityColor = when (report.level) {
+        "excellent" -> EmeraldGlow
+        "good" -> CyanLiquid
+        "fair" -> Color(0xFFF59E0B)
+        "poor" -> Color(0xFFFF5A6E)
+        else -> Color.White.copy(alpha = 0.55f)
+    }
+
+    LiquidGlassCard(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = 22.dp,
+        highlightColor = qualityColor.copy(alpha = 0.45f)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isFa) "تست لحظه‌ای پینگ (1.1.1.1)" else "Live Ping & Quality (1.1.1.1)",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(qualityColor.copy(alpha = 0.16f))
+                        .padding(horizontal = 9.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = if (report.score > 0) "${report.score}%" else "--",
+                        color = qualityColor,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // نوار پیشرفت کیفیت اینترنت
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White.copy(alpha = 0.08f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth((report.score / 100f).coerceIn(0.03f, 1f))
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(qualityColor)
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                PingMetricMiniBox(
+                    modifier = Modifier.weight(1f),
+                    title = if (isFa) "اینترنت کاربر (بدون VPN)" else "User ISP (Direct)",
+                    pingMs = uiState.directPingMs,
+                    jitterMs = uiState.directJitterMs,
+                    history = uiState.directPingHistory,
+                    accent = CyanLiquid,
+                    isFa = isFa
+                )
+                PingMetricMiniBox(
+                    modifier = Modifier.weight(1f),
+                    title = if (isFa) "با VPN (1.1.1.1)" else "With VPN (1.1.1.1)",
+                    pingMs = if (isConnected) uiState.vpnPingMs else -1,
+                    jitterMs = if (isConnected) uiState.vpnJitterMs else -1,
+                    history = if (isConnected) uiState.vpnPingHistory else emptyList(),
+                    accent = EmeraldGlow,
+                    isFa = isFa
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            val deltaText = buildString {
+                if (report.deltaPingMs != null) {
+                    val sign = if (report.deltaPingMs >= 0) "+" else ""
+                    append(if (isFa) "اختلاف پینگ: ${sign}${report.deltaPingMs}ms" else "Delta: ${sign}${report.deltaPingMs}ms")
+                    if (report.deltaJitterMs != null) {
+                        val jSign = if (report.deltaJitterMs >= 0) "+" else ""
+                        append(if (isFa) " • نوسان: ${jSign}${report.deltaJitterMs}ms" else " • Jitter Δ: ${jSign}${report.deltaJitterMs}ms")
+                    }
+                    append(" — ")
+                }
+                append(if (isFa) report.labelFa else report.labelEn)
+            }
+
+            Text(
+                text = deltaText,
+                color = qualityColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun PingMetricMiniBox(
+    modifier: Modifier,
+    title: String,
+    pingMs: Int,
+    jitterMs: Int,
+    history: List<Int>,
+    accent: Color,
+    isFa: Boolean
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.045f))
+            .padding(10.dp)
+    ) {
+        Text(
+            text = title,
+            color = Color.White.copy(alpha = 0.65f),
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom
+        ) {
+            Text(
+                text = if (pingMs > 0) "${pingMs}ms" else "--",
+                color = if (pingMs > 0) accent else Color.White.copy(alpha = 0.45f),
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
+            Text(
+                text = if (jitterMs >= 0) "${if (isFa) "نوسان" else "Jitter"} ±${jitterMs}ms" else (if (isFa) "نوسان --" else "Jitter --"),
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 10.sp
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        // نمودار میله‌ای زنده نوسان پینگ
+        val bars = history.takeLast(10)
+        val maxVal = (bars.maxOrNull() ?: 120).coerceAtLeast(80)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(18.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            val pad = (10 - bars.size).coerceAtLeast(0)
+            repeat(pad) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                )
+            }
+            bars.forEach { sample ->
+                val frac = (sample.toFloat() / maxVal.toFloat()).coerceIn(0.18f, 1f)
+                val barColor = when {
+                    sample <= 110 -> accent
+                    sample <= 220 -> Color(0xFFF59E0B)
+                    else -> Color(0xFFFF5A6E)
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height((18f * frac).dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(barColor.copy(alpha = 0.85f))
+                )
             }
         }
     }

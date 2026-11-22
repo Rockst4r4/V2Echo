@@ -296,6 +296,24 @@ class EcholicenseApi:
         self._tray = None
         self._quitting = False
         self._last_tray_sig = None
+        self._phys_gw = None
+        self._ping_lock = threading.Lock()
+        self._direct_hist: list[int] = []
+        self._vpn_hist: list[int] = []
+        self._live_ping = {
+            "directMs": -1,
+            "directJitter": -1,
+            "directHistory": [],
+            "vpnMs": -1,
+            "vpnJitter": -1,
+            "vpnHistory": [],
+            "deltaMs": None,
+            "deltaJitter": None,
+            "qualityScore": 0,
+            "qualityLevel": "offline",
+            "qualityFa": "در حال سنجش پینگ 1.1.1.1...",
+            "qualityEn": "Probing 1.1.1.1...",
+        }
 
         self._state = self._load_saved_state()
         self._state["connectionState"] = "DISCONNECTED"
@@ -305,6 +323,7 @@ class EcholicenseApi:
 
         atexit.register(self._cleanup_on_exit)
         threading.Thread(target=self._background_loops, daemon=True).start()
+        threading.Thread(target=self._live_ping_loop, daemon=True).start()
 
     def _default_state(self) -> dict:
         return {
@@ -577,6 +596,227 @@ class EcholicenseApi:
             pass
         return ("Cloudflare", "https://1.1.1.1/dns-query")
 
+
+    def _detect_default_gateway(self) -> str | None:
+        if os.name != "nt":
+            return None
+        try:
+            flags = subprocess.CREATE_NO_WINDOW
+            out = subprocess.check_output(
+                ["route", "print", "0.0.0.0"],
+                text=True,
+                errors="ignore",
+                creationflags=flags,
+                timeout=3,
+            )
+            best = None
+            best_metric = 999999
+            for line in out.splitlines():
+                m = re.match(r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+)", line)
+                if m:
+                    gw, iface_ip, metric = m.group(1), m.group(2), int(m.group(3))
+                    if self._phys_ip and iface_ip == self._phys_ip:
+                        return gw
+                    if metric < best_metric:
+                        best_metric = metric
+                        best = gw
+            return best
+        except Exception:
+            return None
+
+    def _add_direct_probe_route(self):
+        if os.name != "nt":
+            return
+        try:
+            gw = self._phys_gw or self._detect_default_gateway()
+            if gw:
+                self._phys_gw = gw
+                self._run_hidden(["route", "delete", "1.0.0.1"])
+                cmd = ["route", "add", "1.0.0.1", "mask", "255.255.255.255", gw, "metric", "1"]
+                if self._phys_if_index:
+                    cmd.extend(["IF", str(self._phys_if_index)])
+                self._run_hidden(cmd)
+        except Exception:
+            pass
+
+    def _remove_direct_probe_route(self):
+        if os.name != "nt":
+            return
+        try:
+            self._run_hidden(["route", "delete", "1.0.0.1"])
+        except Exception:
+            pass
+
+    @staticmethod
+    def _read_http_headers(sock: socket.socket) -> bytes:
+        buf = bytearray()
+        while len(buf) < 4096:
+            chunk = sock.recv(512)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            if b"\r\n\r\n" in buf:
+                break
+        return bytes(buf)
+
+    @staticmethod
+    def _read_first_line(sock: socket.socket) -> bytes:
+        buf = bytearray()
+        while len(buf) < 512:
+            chunk = sock.recv(128)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            if b"\n" in buf:
+                break
+        return bytes(buf)
+
+    def _probe_http_rtt(self, target_ip: str, proxy_port: int | None = None, timeout: float = 1.8) -> int:
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            if proxy_port:
+                sock.connect(("127.0.0.1", int(proxy_port)))
+                sock.sendall(f"CONNECT {target_ip}:80 HTTP/1.1\r\nHost: {target_ip}:80\r\n\r\n".encode())
+                conn_hdr = self._read_http_headers(sock)
+                if b"200" not in conn_hdr:
+                    return -1
+                tcp_ms = -1
+            else:
+                t_c0 = time.perf_counter()
+                sock.connect((target_ip, 80))
+                tcp_ms = max(1, int((time.perf_counter() - t_c0) * 1000))
+
+            t_f0 = time.perf_counter()
+            sock.sendall(f"HEAD /cdn-cgi/trace HTTP/1.1\r\nHost: {target_ip}\r\nConnection: keep-alive\r\n\r\n".encode())
+            h1 = self._read_http_headers(sock)
+            first_ms = max(1, int((time.perf_counter() - t_f0) * 1000))
+            if not h1:
+                return tcp_ms if tcp_ms > 0 else -1
+
+            if b"connection: close" not in h1.lower():
+                t0 = time.perf_counter()
+                sock.sendall(f"HEAD /cdn-cgi/trace HTTP/1.1\r\nHost: {target_ip}\r\nConnection: close\r\n\r\n".encode())
+                l2 = self._read_first_line(sock)
+                if l2.startswith(b"HTTP/"):
+                    return max(1, min(3000, int((time.perf_counter() - t0) * 1000)))
+
+            if tcp_ms > 0 and not proxy_port:
+                return min(3000, tcp_ms)
+            return max(15, min(3000, first_ms // 2))
+        except Exception:
+            return -1
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _calc_jitter(samples: list[int]) -> int:
+        valid = [x for x in samples if x > 0]
+        if len(valid) < 2:
+            return -1
+        diffs = [abs(valid[i] - valid[i - 1]) for i in range(1, len(valid))]
+        return int(round(sum(diffs) / len(diffs)))
+
+    @staticmethod
+    def _eval_quality(is_conn: bool, d_ms: int, d_jit: int, v_ms: int, v_jit: int) -> dict:
+        delta_ms = (v_ms - d_ms) if (is_conn and d_ms > 0 and v_ms > 0) else None
+        delta_jit = (v_jit - d_jit) if (is_conn and d_jit >= 0 and v_jit >= 0) else None
+
+        if d_ms <= 0 and (not is_conn or v_ms <= 0):
+            return {"score": 0, "level": "offline", "fa": "در حال تست / عدم پاسخ 1.1.1.1", "en": "Probing / 1.1.1.1 Unreachable", "deltaMs": None, "deltaJitter": None}
+
+        if not is_conn:
+            j = max(0, d_jit)
+            if d_ms <= 70 and j <= 12:
+                return {"score": 94, "level": "excellent", "fa": "اینترنت کاربر عالی و پایدار", "en": "User ISP: Excellent & Stable", "deltaMs": None, "deltaJitter": None}
+            if d_ms <= 130 and j <= 28:
+                return {"score": 78, "level": "good", "fa": "اینترنت کاربر خوب (آماده اتصال)", "en": "User ISP: Good (Ready)", "deltaMs": None, "deltaJitter": None}
+            if d_ms <= 220 and j <= 55:
+                return {"score": 52, "level": "fair", "fa": "نوسان متوسط روی اینترنت کاربر", "en": "User ISP: Moderate Jitter", "deltaMs": None, "deltaJitter": None}
+            return {"score": 24, "level": "poor", "fa": "اختلال و نوسان بالا روی اینترنت کاربر", "en": "User ISP: High Instability", "deltaMs": None, "deltaJitter": None}
+
+        if v_ms <= 0:
+            return {"score": 35, "level": "fair", "fa": "در حال سنجش پینگ داخل VPN...", "en": "Measuring VPN ping...", "deltaMs": None, "deltaJitter": None}
+
+        dj = max(0, d_jit)
+        vj = max(0, v_jit)
+        if d_ms > 0 and (d_ms > 180 or dj > 45):
+            return {"score": 28, "level": "poor", "fa": "افت کیفیت از اینترنت کاربر (نوسان نت پایه بالاست)", "en": "ISP Issue (High Base Jitter)", "deltaMs": delta_ms, "deltaJitter": delta_jit}
+
+        if delta_ms is not None:
+            j_over = max(0, delta_jit or 0)
+            if delta_ms <= 90 and v_ms <= 155 and vj <= 18:
+                return {"score": 95, "level": "excellent", "fa": "کیفیت عالی • پینگ و نوسان کاملاً پایدار", "en": "Excellent • Stable Low Jitter", "deltaMs": delta_ms, "deltaJitter": delta_jit}
+            if delta_ms <= 150 and v_ms <= 235 and vj <= 35:
+                return {"score": 78, "level": "good", "fa": "کیفیت خوب • مسیر VPN پایدار", "en": "Good • Stable VPN Route", "deltaMs": delta_ms, "deltaJitter": delta_jit}
+            if delta_ms > 150 or j_over > 30:
+                return {"score": 44, "level": "fair", "fa": "اختلاف پینگ VPN زیاد است • تعویض سرور پیشنهاد می‌شود", "en": "High VPN Delta • Switch Server", "deltaMs": delta_ms, "deltaJitter": delta_jit}
+            if v_ms > 320 or vj > 60:
+                return {"score": 25, "level": "poor", "fa": "کیفیت ضعیف • نوسان شدید اتصال", "en": "Poor • High Latency/Jitter", "deltaMs": delta_ms, "deltaJitter": delta_jit}
+            return {"score": 60, "level": "fair", "fa": "کیفیت متوسط • قابل استفاده", "en": "Fair • Moderate Quality", "deltaMs": delta_ms, "deltaJitter": delta_jit}
+
+        if v_ms <= 145 and vj <= 20:
+            return {"score": 92, "level": "excellent", "fa": "اتصال VPN عالی و پایدار", "en": "VPN: Excellent", "deltaMs": None, "deltaJitter": None}
+        if v_ms <= 235 and vj <= 38:
+            return {"score": 76, "level": "good", "fa": "اتصال VPN خوب", "en": "VPN: Good", "deltaMs": None, "deltaJitter": None}
+        if v_ms <= 320:
+            return {"score": 52, "level": "fair", "fa": "اتصال VPN متوسط", "en": "VPN: Fair", "deltaMs": None, "deltaJitter": None}
+        return {"score": 26, "level": "poor", "fa": "پینگ VPN بالاست", "en": "VPN: High Ping", "deltaMs": None, "deltaJitter": None}
+
+    def _live_ping_loop(self):
+        time.sleep(1.2)
+        while not self._quitting:
+            try:
+                is_conn = self._state.get("connectionState") == "CONNECTED"
+                mode = self._state.get("mode", "tun")
+
+                if not is_conn:
+                    self._phys_gw = self._detect_default_gateway() or self._phys_gw
+                    d_ms = self._probe_http_rtt("1.1.1.1")
+                    v_ms = -1
+                    self._vpn_hist = []
+                elif mode == "proxy":
+                    d_ms = self._probe_http_rtt("1.1.1.1")
+                    v_ms = self._probe_http_rtt("1.1.1.1", proxy_port=self._active_port)
+                else:
+                    v_ms = self._probe_http_rtt("1.1.1.1")
+                    d_ms = self._probe_http_rtt("1.0.0.1")
+
+                if d_ms > 0:
+                    self._direct_hist = (self._direct_hist + [d_ms])[-12:]
+                if is_conn and v_ms > 0:
+                    self._vpn_hist = (self._vpn_hist + [v_ms])[-12:]
+
+                d_jit = self._calc_jitter(self._direct_hist)
+                v_jit = self._calc_jitter(self._vpn_hist) if is_conn else -1
+                q = self._eval_quality(is_conn, d_ms, d_jit, v_ms if is_conn else -1, v_jit)
+
+                with self._ping_lock:
+                    self._live_ping = {
+                        "directMs": d_ms,
+                        "directJitter": d_jit,
+                        "directHistory": list(self._direct_hist),
+                        "vpnMs": v_ms if is_conn else -1,
+                        "vpnJitter": v_jit if is_conn else -1,
+                        "vpnHistory": list(self._vpn_hist) if is_conn else [],
+                        "deltaMs": q["deltaMs"],
+                        "deltaJitter": q["deltaJitter"],
+                        "qualityScore": q["score"],
+                        "qualityLevel": q["level"],
+                        "qualityFa": q["fa"],
+                        "qualityEn": q["en"],
+                    }
+            except Exception:
+                pass
+            time.sleep(2.5)
+
     def _background_loops(self):
         time.sleep(1.5)
         self._fetch_announcement()
@@ -756,6 +996,8 @@ class EcholicenseApi:
         out["downKbps"] = down_kbps if self._state["connectionState"] == "CONNECTED" else 0
         out["upKbps"] = up_kbps if self._state["connectionState"] == "CONNECTED" else 0
         out["connectedSeconds"] = connected_sec
+        with self._ping_lock:
+            out["livePing"] = dict(self._live_ping)
         self._sync_tray()
         return out
 
@@ -810,6 +1052,7 @@ class EcholicenseApi:
         # اجرای WireGuard روی درایور کرنل بومی برای پینگ واقعی ICMP در CMD (بدون <1ms فیک)
         if mode == "tun" and srv.get("protocol", "").upper() == "WIREGUARD":
             if self._start_native_wg(srv, dns_addr, mtu):
+                self._add_direct_probe_route()
                 self._set_windows_proxy(False)
                 self._connected_at = time.time()
                 self._state["connectionState"] = "CONNECTED"
@@ -836,6 +1079,9 @@ class EcholicenseApi:
                 tun_stack=stack,
                 app_dir=str(get_app_dir()),
             )
+            if isinstance(cfg, dict) and isinstance(cfg.get("route"), dict):
+                rules = cfg["route"].setdefault("rules", [])
+                rules.insert(0, {"ip_cidr": ["1.0.0.1/32"], "port": [80, 443], "outbound": "direct"})
             cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
             if self._log_fh:
@@ -896,6 +1142,7 @@ class EcholicenseApi:
         return self.get_state()
 
     def disconnect(self, keep_killswitch: bool = False) -> dict:
+        self._remove_direct_probe_route()
         self._stop_native_wg()
         if self._proc:
             try:

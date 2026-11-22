@@ -30,6 +30,12 @@ data class VpnUiState(
     val downloadSpeedKbps: Long = 0L,
     val uploadSpeedKbps: Long = 0L,
     val connectedSeconds: Long = 0L,
+    val directPingMs: Int = -1,
+    val directJitterMs: Int = -1,
+    val directPingHistory: List<Int> = emptyList(),
+    val vpnPingMs: Int = -1,
+    val vpnJitterMs: Int = -1,
+    val vpnPingHistory: List<Int> = emptyList(),
     val statusMessage: String = "Ready to connect"
 )
 
@@ -53,7 +59,10 @@ object VpnStateManager {
             statusMessage = msg,
             downloadSpeedKbps = 0,
             uploadSpeedKbps = 0,
-            connectedSeconds = 0
+            connectedSeconds = 0,
+            vpnPingMs = -1,
+            vpnJitterMs = -1,
+            vpnPingHistory = emptyList()
         )
     }
 }

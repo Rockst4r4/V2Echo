@@ -28,6 +28,11 @@ import com.echolicense.vpn.worker.TrafficAlertWorker
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import com.echolicense.vpn.core.LivePingMonitor
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -49,6 +54,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val repo = SubscriptionRepository()
+    private var idlePingJob: Job? = null
     private val prefs by lazy { getSharedPreferences(TrafficAlertWorker.PREFS_NAME, Context.MODE_PRIVATE) }
 
     private val vpnPermissionLauncher = registerForActivityResult(
@@ -69,6 +75,39 @@ class MainActivity : ComponentActivity() {
             val count = VpnStateManager.state.value.subscriptions.size + 1
             handleAddSubscription("QR Sub #$count", scanned)
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        idlePingJob?.cancel()
+        idlePingJob = lifecycleScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                if (VpnStateManager.state.value.connectionState != ConnectionState.CONNECTED) {
+                    val dMs = LivePingMonitor.probeDirect1111()
+                    VpnStateManager.update { st ->
+                        if (st.connectionState == ConnectionState.CONNECTED) st
+                        else {
+                            val nextHist = if (dMs > 0) (st.directPingHistory + dMs).takeLast(12) else st.directPingHistory
+                            st.copy(
+                                directPingMs = dMs,
+                                directJitterMs = LivePingMonitor.computeJitter(nextHist),
+                                directPingHistory = nextHist,
+                                vpnPingMs = -1,
+                                vpnJitterMs = -1,
+                                vpnPingHistory = emptyList()
+                            )
+                        }
+                    }
+                }
+                delay(2500)
+            }
+        }
+    }
+
+    override fun onStop() {
+        idlePingJob?.cancel()
+        idlePingJob = null
+        super.onStop()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

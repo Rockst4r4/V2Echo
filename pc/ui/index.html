@@ -226,6 +226,22 @@ body.connected .win-dot {
 .win-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 .win-btn.close:hover { background: rgba(255, 90, 110, 0.85); color: #fff; }
 
+
+.ping-q-card { padding: 12px 14px; margin-top: 10px; }
+.ping-q-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 7px; }
+.ping-q-pill { font-size: 11px; font-weight: 800; padding: 2px 9px; border-radius: 999px; background: rgba(255,255,255,0.08); }
+.ping-q-bar-bg { width: 100%; height: 5px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; margin-bottom: 10px; }
+.ping-q-bar-fill { height: 100%; border-radius: 999px; transition: width 0.35s ease, background 0.35s ease; }
+.ping-mini-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ping-mini { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 8px 10px; }
+.ping-mini-lbl { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ping-mini-vals { display: flex; justify-content: space-between; align-items: baseline; margin-top: 3px; }
+.ping-mini-ms { font-size: 14px; font-weight: 800; }
+.ping-mini-jit { font-size: 10px; color: var(--muted); }
+.spark-bars { display: flex; align-items: flex-end; gap: 3px; height: 16px; margin-top: 6px; }
+.spark-bar { flex: 1; border-radius: 2px; min-height: 3px; background: rgba(255,255,255,0.09); transition: height 0.25s ease; }
+.ping-verdict { font-size: 11px; font-weight: 600; margin-top: 8px; line-height: 1.45; }
+
 </style>
 </head>
 <body>
@@ -364,6 +380,33 @@ body.connected .win-dot {
     <div style="font-size:13px;font-weight:700;margin-top:4px" id="dnsLabel">Auto</div>
     <div style="font-size:11px;color:var(--muted)" id="mtuLabel">MTU: 1360</div>
   </div>
+</div>
+
+<div class="glass ping-q-card" id="pingQualityCard">
+  <div class="ping-q-head">
+    <span style="font-size:12px;font-weight:700" id="pingCardTitle">Live Ping & Quality (1.1.1.1)</span>
+    <span class="ping-q-pill" id="pingScorePill">--</span>
+  </div>
+  <div class="ping-q-bar-bg"><div class="ping-q-bar-fill" id="pingQualityBar" style="width:4%"></div></div>
+  <div class="ping-mini-grid">
+    <div class="ping-mini">
+      <div class="ping-mini-lbl" id="directPingLbl">User ISP (Direct)</div>
+      <div class="ping-mini-vals">
+        <span class="ping-mini-ms" id="directPingVal" style="color:var(--cyan)">--</span>
+        <span class="ping-mini-jit" id="directJitterVal">Jitter --</span>
+      </div>
+      <div class="spark-bars" id="directSpark"></div>
+    </div>
+    <div class="ping-mini">
+      <div class="ping-mini-lbl" id="vpnPingLbl">With VPN (1.1.1.1)</div>
+      <div class="ping-mini-vals">
+        <span class="ping-mini-ms" id="vpnPingVal" style="color:var(--green)">--</span>
+        <span class="ping-mini-jit" id="vpnJitterVal">Jitter --</span>
+      </div>
+      <div class="spark-bars" id="vpnSpark"></div>
+    </div>
+  </div>
+  <div class="ping-verdict" id="pingVerdictText">Probing 1.1.1.1...</div>
 </div>
 
 <div style="height:10px"></div>
@@ -531,6 +574,62 @@ function render(st) {
   document.getElementById('dnsLabel').textContent = st.manualDns || st.activeDns || 'Auto';
   document.getElementById('mtuLabel').textContent = `MTU: ${st.mtu || 1360} ${st.autoMtu ? '(Auto)' : ''}`;
   document.getElementById('botSub').textContent = `@${st.botUsername || 'echopress_bot'} • Renew & Support`;
+
+  // Live Ping & Quality (1.1.1.1 Direct vs VPN)
+  const lp = st.livePing || {};
+  const isFa = st.language === 'fa';
+  const qColors = { excellent: '#00E5A3', good: '#22E4FF', fair: '#F59E0B', poor: '#FF5A6E', offline: 'rgba(255,255,255,0.45)' };
+  const qCol = qColors[lp.qualityLevel || 'offline'] || qColors.offline;
+
+  document.getElementById('pingCardTitle').textContent = isFa ? 'تست لحظه‌ای پینگ (1.1.1.1)' : 'Live Ping & Quality (1.1.1.1)';
+  document.getElementById('directPingLbl').textContent = isFa ? 'اینترنت کاربر (بدون VPN)' : 'User ISP (Direct)';
+  document.getElementById('vpnPingLbl').textContent = isFa ? 'با VPN (1.1.1.1)' : 'With VPN (1.1.1.1)';
+
+  const pill = document.getElementById('pingScorePill');
+  pill.textContent = lp.qualityScore > 0 ? `${lp.qualityScore}%` : '--';
+  pill.style.color = qCol;
+  pill.style.background = `${qCol}22`;
+
+  const qBar = document.getElementById('pingQualityBar');
+  qBar.style.width = `${Math.max(4, lp.qualityScore || 0)}%`;
+  qBar.style.background = qCol;
+
+  document.getElementById('directPingVal').textContent = lp.directMs > 0 ? `${lp.directMs}ms` : '--';
+  document.getElementById('directJitterVal').textContent = lp.directJitter >= 0 ? `${isFa ? 'نوسان' : 'Jitter'} ±${lp.directJitter}ms` : `${isFa ? 'نوسان' : 'Jitter'} --`;
+  document.getElementById('vpnPingVal').textContent = (isConn && lp.vpnMs > 0) ? `${lp.vpnMs}ms` : '--';
+  document.getElementById('vpnJitterVal').textContent = (isConn && lp.vpnJitter >= 0) ? `${isFa ? 'نوسان' : 'Jitter'} ±${lp.vpnJitter}ms` : `${isFa ? 'نوسان' : 'Jitter'} --`;
+
+  const renderSpark = (elId, arr, accent) => {
+    const el = document.getElementById(elId);
+    const items = (arr || []).slice(-10);
+    const maxV = Math.max(80, ...items);
+    const pad = Math.max(0, 10 - items.length);
+    let html = '';
+    for (let i = 0; i < pad; i++) html += '<div class="spark-bar" style="height:3px"></div>';
+    for (const v of items) {
+      const h = Math.max(3, Math.round((v / maxV) * 16));
+      const c = v <= 110 ? accent : (v <= 220 ? '#F59E0B' : '#FF5A6E');
+      html += `<div class="spark-bar" style="height:${h}px;background:${c}"></div>`;
+    }
+    el.innerHTML = html;
+  };
+  renderSpark('directSpark', lp.directHistory, '#22E4FF');
+  renderSpark('vpnSpark', isConn ? lp.vpnHistory : [], '#00E5A3');
+
+  let vText = isFa ? (lp.qualityFa || 'در حال بررسی...') : (lp.qualityEn || 'Checking...');
+  if (isConn && lp.deltaMs !== null && lp.deltaMs !== undefined) {
+    const sgn = lp.deltaMs >= 0 ? '+' : '';
+    let dPart = isFa ? `اختلاف پینگ: ${sgn}${lp.deltaMs}ms` : `Delta: ${sgn}${lp.deltaMs}ms`;
+    if (lp.deltaJitter !== null && lp.deltaJitter !== undefined) {
+      const jSgn = lp.deltaJitter >= 0 ? '+' : '';
+      dPart += isFa ? ` • نوسان: ${jSgn}${lp.deltaJitter}ms` : ` • Jitter Δ: ${jSgn}${lp.deltaJitter}ms`;
+    }
+    vText = `${dPart} — ${vText}`;
+  }
+  const vEl = document.getElementById('pingVerdictText');
+  vEl.textContent = vText;
+  vEl.style.color = qCol;
+
 
   // Banner
   const b = st.announcement;

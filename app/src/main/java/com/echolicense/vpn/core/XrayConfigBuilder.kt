@@ -21,7 +21,8 @@ object XrayConfigBuilder {
         enableAdBlocker: Boolean,
         mtu: Int,
         muxConfig: MuxConfig,
-        hasGeoFiles: Boolean
+        hasGeoFiles: Boolean,
+        probePort: Int = 0
     ): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "none"))
@@ -101,7 +102,18 @@ object XrayConfigBuilder {
                     .put("destOverride", JSONArray().put("http").put("tls").put("quic"))
                     .put("routeOnly", false)
             )
-        root.put("inbounds", JSONArray().put(tunInbound))
+        val inbounds = JSONArray().put(tunInbound)
+        if (probePort > 0) {
+            inbounds.put(
+                JSONObject()
+                    .put("tag", "probe-http")
+                    .put("listen", "127.0.0.1")
+                    .put("port", probePort)
+                    .put("protocol", "http")
+                    .put("settings", JSONObject())
+            )
+        }
+        root.put("inbounds", inbounds)
 
         val outbounds = JSONArray()
         val proxyOutbound = when (profile.protocol) {
