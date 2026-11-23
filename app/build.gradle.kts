@@ -12,8 +12,9 @@ android {
         applicationId = "com.echolicense.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.let { 100 + it } ?: 100)
         versionName = "1.9"
+        buildConfigField("long", "BUILD_EPOCH", "${System.currentTimeMillis() / 1000L}L")
     }
 
     signingConfigs {
@@ -62,6 +63,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

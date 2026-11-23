@@ -161,6 +161,7 @@ jobs:
         shell: pwsh
         working-directory: pc
         run: |
+          python -c "import time, re; from pathlib import Path; p=Path('main.py'); p.write_text(re.sub(r'BUILD_EPOCH\s*=\s*\d+', f'BUILD_EPOCH = {int(time.time())}', p.read_text('utf-8'), count=1), 'utf-8')"
           pyinstaller --noconfirm --onefile --windowed --uac-admin --name "EcholicenseVPN" --icon "assets\icon.ico" --add-data "ui;ui" --add-data "assets;assets" main.py
           New-Item -ItemType Directory -Force -Path "release_pkg" | Out-Null
           Copy-Item "dist\EcholicenseVPN.exe" -Destination "release_pkg\"

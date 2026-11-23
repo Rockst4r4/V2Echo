@@ -37,6 +37,15 @@ data class VpnUiState(
     val vpnPingMs: Int = -1,
     val vpnJitterMs: Int = -1,
     val vpnPingHistory: List<Int> = emptyList(),
+    val updateAvailable: Boolean = false,
+    val updateTag: String = "",
+    val updateUrl: String = "",
+    val updateFileName: String = "",
+    val updateSizeMb: Double = 0.0,
+    val isCheckingUpdate: Boolean = false,
+    val isDownloadingUpdate: Boolean = false,
+    val updateDownloadProgress: Int = 0,
+    val updateStatusText: String = "",
     val statusMessage: String = "Ready to connect"
 )
 

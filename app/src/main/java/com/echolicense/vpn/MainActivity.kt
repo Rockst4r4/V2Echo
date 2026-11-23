@@ -33,6 +33,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import com.echolicense.vpn.core.LivePingMonitor
+import java.io.File
+import com.echolicense.vpn.core.AppUpdater
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -55,6 +57,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private val repo = SubscriptionRepository()
+    private var cachedUpdateApk: File? = null
+    private var updateJob: Job? = null
     private var idlePingJob: Job? = null
     private val prefs by lazy { getSharedPreferences(TrafficAlertWorker.PREFS_NAME, Context.MODE_PRIVATE) }
 
@@ -160,6 +164,7 @@ class MainActivity : ComponentActivity() {
 
         AnnouncementWorker.schedule(this)
         lifecycleScope.launch { AnnouncementWorker.fetchAndProcess(this@MainActivity) }
+        checkAppUpdate(silent = true)
 
         if (activeSub != null) {
             SubscriptionAutoUpdateWorker.schedule(this, replace = false)
@@ -205,6 +210,8 @@ class MainActivity : ComponentActivity() {
                             dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
                         }
                     },
+                    onCheckUpdate = { checkAppUpdate(silent = false) },
+                    onDownloadInstallUpdate = { downloadAndInstallUpdate() },
                     onToggleAdBlocker = { enabled ->
                         prefs.edit().putBoolean(KEY_ADBLOCK, enabled).apply()
                         VpnStateManager.update { it.copy(adBlockerEnabled = enabled) }
@@ -530,6 +537,123 @@ class MainActivity : ComponentActivity() {
                     activeServer = nextActive,
                     statusMessage = doneMsg
                 )
+            }
+        }
+    }
+
+    private fun checkAppUpdate(silent: Boolean) {
+        if (VpnStateManager.state.value.isDownloadingUpdate) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            if (!silent) {
+                VpnStateManager.update {
+                    val isFa = it.language == AppLanguage.FA
+                    it.copy(
+                        isCheckingUpdate = true,
+                        updateStatusText = if (isFa) "در حال بررسی آخرین نسخه..." else "Checking for updates..."
+                    )
+                }
+            }
+            val info = AppUpdater.checkForUpdate(BuildConfig.VERSION_NAME, BuildConfig.BUILD_EPOCH)
+            VpnStateManager.update { st ->
+                val isFa = st.language == AppLanguage.FA
+                if (info == null) {
+                    st.copy(
+                        isCheckingUpdate = false,
+                        updateStatusText = if (silent) st.updateStatusText else (if (isFa) "خطا در ارتباط با سرور آپدیت" else "Failed to reach update server")
+                    )
+                } else {
+                    val msg = when {
+                        info.hasUpdate -> if (isFa) "نسخه جدید ${info.latestTag} آماده نصب است" else "New update ${info.latestTag} is ready"
+                        else -> if (isFa) "شما روی آخرین نسخه (${info.latestTag}) هستید" else "You are on the latest version (${info.latestTag})"
+                    }
+                    st.copy(
+                        isCheckingUpdate = false,
+                        updateAvailable = info.hasUpdate,
+                        updateTag = info.latestTag,
+                        updateUrl = info.downloadUrl,
+                        updateFileName = info.fileName,
+                        updateSizeMb = info.sizeMb,
+                        updateStatusText = if (silent && !info.hasUpdate) "" else msg
+                    )
+                }
+            }
+        }
+    }
+
+    private fun downloadAndInstallUpdate() {
+        val st = VpnStateManager.state.value
+        val isFa = st.language == AppLanguage.FA
+        if (st.isDownloadingUpdate) return
+
+        val readyApk = cachedUpdateApk
+        if (readyApk != null && readyApk.exists() && readyApk.length() > 1_000_000L) {
+            if (!AppUpdater.canInstallPackages(this)) {
+                VpnStateManager.update {
+                    it.copy(updateStatusText = if (isFa) "مجوز نصب برنامه را فعال کرده و دوباره دکمه نصب را بزنید" else "Enable 'Install unknown apps' then tap Install again")
+                }
+                AppUpdater.openInstallPermissionSettings(this)
+                return
+            }
+            runCatching { AppUpdater.launchApkInstaller(this, readyApk) }
+            return
+        }
+
+        if (st.updateUrl.isBlank()) {
+            checkAppUpdate(silent = false)
+            return
+        }
+
+        updateJob?.cancel()
+        updateJob = lifecycleScope.launch(Dispatchers.IO) {
+            VpnStateManager.update {
+                it.copy(
+                    isDownloadingUpdate = true,
+                    updateDownloadProgress = 0,
+                    updateStatusText = if (isFa) "در حال دانلود فایل آپدیت..." else "Downloading update..."
+                )
+            }
+            try {
+                val apk = AppUpdater.downloadApk(
+                    context = this@MainActivity,
+                    url = st.updateUrl,
+                    fileName = st.updateFileName
+                ) { pct ->
+                    VpnStateManager.update {
+                        it.copy(
+                            updateDownloadProgress = pct,
+                            updateStatusText = if (isFa) "در حال دانلود... $pct%" else "Downloading... $pct%"
+                        )
+                    }
+                }
+                cachedUpdateApk = apk
+                if (!AppUpdater.canInstallPackages(this@MainActivity)) {
+                    VpnStateManager.update {
+                        it.copy(
+                            isDownloadingUpdate = false,
+                            updateDownloadProgress = 100,
+                            updateStatusText = if (isFa) "دانلود کامل شد • مجوز نصب را فعال کنید و مجدد نصب را بزنید" else "Downloaded • Enable install permission then tap Install"
+                        )
+                    }
+                    runOnUiThread { AppUpdater.openInstallPermissionSettings(this@MainActivity) }
+                } else {
+                    VpnStateManager.update {
+                        it.copy(
+                            isDownloadingUpdate = false,
+                            updateDownloadProgress = 100,
+                            updateStatusText = if (isFa) "آماده نصب • پنجره نصب باز شد" else "Ready • Installer launched"
+                        )
+                    }
+                    runOnUiThread {
+                        runCatching { AppUpdater.launchApkInstaller(this@MainActivity, apk) }
+                    }
+                }
+            } catch (e: Throwable) {
+                VpnStateManager.update {
+                    it.copy(
+                        isDownloadingUpdate = false,
+                        updateStatusText = if (isFa) "خطا در دانلود: ${e.message ?: "نامشخص"}" else "Download failed: ${e.message ?: "unknown"}"
+                    )
+                }
             }
         }
     }

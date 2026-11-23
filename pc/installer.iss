@@ -48,7 +48,7 @@ Name: "{autoprograms}\Echolicense VPN"; Filename: "{app}\EcholicenseVPN.exe"
 Name: "{autodesktop}\Echolicense VPN"; Filename: "{app}\EcholicenseVPN.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\EcholicenseVPN.exe"; Description: "Launch Echolicense VPN"; Flags: nowait postinstall skipifsilent shellexec
+Filename: "{app}\EcholicenseVPN.exe"; Description: "Launch Echolicense VPN"; Flags: nowait postinstall shellexec
 
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;

@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.echolicense.vpn.core.LivePingMonitor
 import com.echolicense.vpn.core.VpnUiState
+import com.echolicense.vpn.BuildConfig
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material.icons.rounded.SystemUpdate
 import com.echolicense.vpn.data.*
 import com.echolicense.vpn.ui.theme.*
 import java.util.Locale
@@ -50,6 +53,8 @@ fun MainScreen(
     onSmartPingClick: () -> Unit,
     onToggleIranSplit: (Boolean) -> Unit,
     onToggleLanMirrorBypass: (Boolean) -> Unit,
+    onCheckUpdate: () -> Unit,
+    onDownloadInstallUpdate: () -> Unit,
     onToggleAdBlocker: (Boolean) -> Unit,
     onToggleAiPro: () -> Unit,
     onToggleGaming: () -> Unit,
@@ -67,6 +72,7 @@ fun MainScreen(
     var showServerSheet by remember { mutableStateOf(false) }
     var showDnsDialog by remember { mutableStateOf(false) }
     var showMuxDialog by remember { mutableStateOf(false) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
 
     val visibleServers = remember(uiState.servers, uiState.aiProOnly, uiState.gamingOnly) {
         when {
@@ -116,6 +122,33 @@ fun MainScreen(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    LiquidGlassCard(
+                        cornerRadius = 14.dp,
+                        highlightColor = if (uiState.updateAvailable) EmeraldGlow else GlassBorderTop,
+                        modifier = Modifier.bounceClick {
+                            showUpdateDialog = true
+                            if (!uiState.isDownloadingUpdate) onCheckUpdate()
+                        }
+                    ) {
+                        Box(modifier = Modifier.padding(8.dp)) {
+                            Icon(
+                                imageVector = Icons.Rounded.SystemUpdate,
+                                contentDescription = "Update",
+                                tint = if (uiState.updateAvailable) EmeraldGlow else Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(19.dp)
+                            )
+                            if (uiState.updateAvailable) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .align(Alignment.TopEnd)
+                                        .clip(CircleShape)
+                                        .background(EmeraldGlow)
+                                )
+                            }
+                        }
+                    }
+
                     LiquidGlassCard(
                         cornerRadius = 14.dp,
                         modifier = Modifier.bounceClick(onClick = onToggleLanguage)
@@ -508,6 +541,15 @@ fun MainScreen(
 
             Spacer(Modifier.height(18.dp))
         }
+    }
+
+    if (showUpdateDialog) {
+        AppUpdateDialog(
+            uiState = uiState,
+            onDismiss = { if (!uiState.isDownloadingUpdate) showUpdateDialog = false },
+            onCheckAgain = onCheckUpdate,
+            onDownloadInstall = onDownloadInstallUpdate
+        )
     }
 
     if (showSubDialog) {
@@ -1536,4 +1578,98 @@ private fun PingMetricMiniBox(
             }
         }
     }
+}
+
+
+@Composable
+private fun AppUpdateDialog(
+    uiState: VpnUiState,
+    onDismiss: () -> Unit,
+    onCheckAgain: () -> Unit,
+    onDownloadInstall: () -> Unit
+) {
+    val isFa = uiState.language == AppLanguage.FA
+    val sizeLabel = if (uiState.updateSizeMb > 0.0) String.format("%.1f MB", uiState.updateSizeMb) else ""
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF0E1722),
+        title = {
+            Text(
+                text = if (isFa) "به‌روزرسانی اپلیکیشن" else "App Update",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (isFa) "نسخه فعلی: v${BuildConfig.VERSION_NAME}" else "Current version: v${BuildConfig.VERSION_NAME}",
+                    color = Color.White.copy(alpha = 0.72f),
+                    fontSize = 12.sp
+                )
+                if (uiState.updateTag.isNotBlank()) {
+                    Text(
+                        text = if (isFa) "آخرین نسخه سرور: ${uiState.updateTag} ${if (sizeLabel.isNotBlank()) "($sizeLabel)" else ""}"
+                        else "Latest on server: ${uiState.updateTag} ${if (sizeLabel.isNotBlank()) "($sizeLabel)" else ""}",
+                        color = if (uiState.updateAvailable) EmeraldGlow else CyanLiquid,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+                if (uiState.updateStatusText.isNotBlank()) {
+                    Text(
+                        text = uiState.updateStatusText,
+                        color = Color.White.copy(alpha = 0.88f),
+                        fontSize = 12.sp
+                    )
+                }
+                if (uiState.isDownloadingUpdate) {
+                    LinearProgressIndicator(
+                        progress = { (uiState.updateDownloadProgress / 100f).coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(7.dp)
+                            .clip(RoundedCornerShape(50)),
+                        color = EmeraldGlow,
+                        trackColor = Color.White.copy(alpha = 0.12f)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (uiState.updateUrl.isNotBlank()) {
+                TextButton(
+                    onClick = onDownloadInstall,
+                    enabled = !uiState.isDownloadingUpdate && !uiState.isCheckingUpdate
+                ) {
+                    Text(
+                        text = if (uiState.updateAvailable) {
+                            if (isFa) "دانلود و نصب" else "Download & Install"
+                        } else {
+                            if (isFa) "نصب مجدد" else "Reinstall"
+                        },
+                        color = EmeraldGlow,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                TextButton(
+                    onClick = onCheckAgain,
+                    enabled = !uiState.isCheckingUpdate && !uiState.isDownloadingUpdate
+                ) {
+                    Text(
+                        text = if (isFa) "بررسی مجدد" else "Check Again",
+                        color = CyanLiquid,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !uiState.isDownloadingUpdate) {
+                Text(if (isFa) "بستن" else "Close", color = Color.White.copy(alpha = 0.7f))
+            }
+        }
+    )
 }

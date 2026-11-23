@@ -40,6 +40,7 @@ except ImportError:
 
 APP_NAME = "EcholicenseVPN"
 APP_VERSION = "1.9"
+BUILD_EPOCH = 0
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -300,6 +301,19 @@ class EcholicenseApi:
         self._phys_gw = None
         self._direct_route_active = False
         self._ping_lock = threading.Lock()
+        self._update_lock = threading.Lock()
+        self._update_state = {
+            "available": False,
+            "latestTag": "",
+            "downloadUrl": "",
+            "fileName": "",
+            "sizeMb": 0.0,
+            "checking": False,
+            "downloading": False,
+            "progress": 0,
+            "statusFa": "",
+            "statusEn": "",
+        }
         self._direct_hist: list[int] = []
         self._vpn_hist: list[int] = []
         self._live_ping = {
@@ -954,9 +968,173 @@ class EcholicenseApi:
                 pass
             time.sleep(2.5)
 
+    @staticmethod
+    def _ver_tuple(raw: str) -> tuple[int, ...]:
+        clean = (raw or "").strip().lower().lstrip("v")
+        out = []
+        for part in clean.split("."):
+            digits = "".join(ch for ch in part if ch.isdigit())
+            out.append(int(digits) if digits else 0)
+        return tuple(out) or (0,)
+
+    @staticmethod
+    def _parse_iso_epoch(raw: str) -> int:
+        if not raw:
+            return 0
+        try:
+            from datetime import datetime
+            return int(datetime.fromisoformat(raw.strip().replace("Z", "+00:00")).timestamp())
+        except Exception:
+            return 0
+
+    def _fetch_update_metadata(self) -> dict | None:
+        headers = {"User-Agent": f"Echolicense-PC/{APP_VERSION}"}
+        try:
+            url = f"https://app.echolicense.ai/downloads/latest.json?t={int(time.time() // 60)}"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            tag = data.get("tag") or ""
+            win = data.get("windows") or {}
+            rel_url = win.get("url") or ""
+            if tag and rel_url:
+                full_url = rel_url if rel_url.startswith("http") else f"https://app.echolicense.ai{rel_url}"
+                return {
+                    "tag": tag,
+                    "url": full_url,
+                    "name": win.get("name") or f"Echolicense-Windows-Setup-{tag}.exe",
+                    "sizeMb": float(win.get("size_mb") or 0.0),
+                    "updatedAt": win.get("updated_at") or "",
+                }
+        except Exception:
+            pass
+
+        try:
+            req = urllib.request.Request("https://api.github.com/repos/Rockst4r4/V2Echo/releases/latest", headers=headers)
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                rel = json.loads(resp.read().decode("utf-8"))
+            tag = rel.get("tag_name") or ""
+            for a in rel.get("assets") or []:
+                nm = a.get("name") or ""
+                if re.search(r"windows.*setup.*\.exe$", nm, re.I) or re.search(r"windows.*\.exe$", nm, re.I):
+                    return {
+                        "tag": tag,
+                        "url": a.get("browser_download_url") or "",
+                        "name": nm,
+                        "sizeMb": round(int(a.get("size") or 0) / 1048576.0, 1),
+                        "updatedAt": a.get("updated_at") or "",
+                    }
+        except Exception:
+            pass
+        return None
+
+    def check_app_update(self, silent: bool = False) -> dict:
+        with self._update_lock:
+            if self._update_state.get("downloading"):
+                return self.get_state()
+            if not silent:
+                self._update_state["checking"] = True
+                self._update_state["statusFa"] = "در حال بررسی آخرین نسخه..."
+                self._update_state["statusEn"] = "Checking for updates..."
+
+        info = self._fetch_update_metadata()
+        with self._update_lock:
+            self._update_state["checking"] = False
+            if not info:
+                if not silent:
+                    self._update_state["statusFa"] = "خطا در ارتباط با سرور آپدیت"
+                    self._update_state["statusEn"] = "Failed to reach update server"
+            else:
+                r_ver = self._ver_tuple(info["tag"])
+                l_ver = self._ver_tuple(APP_VERSION)
+                r_epoch = self._parse_iso_epoch(info.get("updatedAt") or "")
+                has_upd = (r_ver > l_ver) or (r_ver == l_ver and BUILD_EPOCH > 0 and r_epoch > BUILD_EPOCH + 600)
+                self._update_state.update({
+                    "available": bool(has_upd),
+                    "latestTag": info["tag"],
+                    "downloadUrl": info["url"],
+                    "fileName": info["name"],
+                    "sizeMb": info["sizeMb"],
+                    "statusFa": f"نسخه جدید {info['tag']} آماده نصب است" if has_upd else f"شما روی آخرین نسخه ({info['tag']}) هستید",
+                    "statusEn": f"Update {info['tag']} is ready to install" if has_upd else f"You are on the latest version ({info['tag']})",
+                })
+        return self.get_state()
+
+    def start_app_update(self) -> dict:
+        with self._update_lock:
+            if self._update_state.get("downloading"):
+                return self.get_state()
+            url = self._update_state.get("downloadUrl") or ""
+            fname = self._update_state.get("fileName") or "Echolicense-Update.exe"
+            if not url:
+                self._update_state["statusFa"] = "ابتدا بررسی نسخه را بزنید"
+                self._update_state["statusEn"] = "Check for updates first"
+                return self.get_state()
+            self._update_state["downloading"] = True
+            self._update_state["progress"] = 0
+            self._update_state["statusFa"] = "در حال دانلود فایل نصبی..."
+            self._update_state["statusEn"] = "Downloading installer..."
+
+        threading.Thread(target=self._download_and_install_update, args=(url, fname), daemon=True).start()
+        return self.get_state()
+
+    def _download_and_install_update(self, url: str, fname: str):
+        import tempfile
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", fname) or "Echolicense-Update.exe"
+        dest = Path(tempfile.gettempdir()) / safe
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": f"Echolicense-PC-Updater/{APP_VERSION}"})
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                with open(dest, "wb") as fh:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if total > 0:
+                            pct = min(100, int(done * 100 / total))
+                            with self._update_lock:
+                                self._update_state["progress"] = pct
+                                self._update_state["statusFa"] = f"در حال دانلود... {pct}%"
+                                self._update_state["statusEn"] = f"Downloading... {pct}%"
+
+            if not dest.exists() or dest.stat().st_size < 5_000_000:
+                raise RuntimeError("Downloaded installer file is invalid")
+
+            with self._update_lock:
+                self._update_state["progress"] = 100
+                self._update_state["statusFa"] = "در حال اجرای نصاب و نصب خودکار..."
+                self._update_state["statusEn"] = "Launching installer..."
+
+            self.disconnect(keep_killswitch=False)
+            time.sleep(0.4)
+            if str(dest).lower().endswith(".exe"):
+                subprocess.Popen([str(dest), "/SP-", "/SILENT", "/NORESTART"], close_fds=True)
+                time.sleep(0.6)
+                self._quitting = True
+                try:
+                    if self._tray:
+                        self._tray.stop()
+                except Exception:
+                    pass
+                os._exit(0)
+            else:
+                os.startfile(str(dest))
+                with self._update_lock:
+                    self._update_state["downloading"] = False
+        except Exception as exc:
+            with self._update_lock:
+                self._update_state["downloading"] = False
+                self._update_state["statusFa"] = f"خطا در دانلود آپدیت: {exc}"
+                self._update_state["statusEn"] = f"Update failed: {exc}"
+
     def _background_loops(self):
         time.sleep(1.5)
         self._fetch_announcement()
+        threading.Thread(target=self.check_app_update, kwargs={'silent': True}, daemon=True).start()
         if self._state.get("autoConnect") and self._state.get("activeServerId"):
             self.toggle_connect()
         last_sub_sync = time.time()
@@ -1135,6 +1313,8 @@ class EcholicenseApi:
         out["connectedSeconds"] = connected_sec
         with self._ping_lock:
             out["livePing"] = dict(self._live_ping)
+        with self._update_lock:
+            out["appUpdate"] = dict(self._update_state)
         self._sync_tray()
         return out
 
