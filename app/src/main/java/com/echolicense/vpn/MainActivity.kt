@@ -583,77 +583,28 @@ class MainActivity : ComponentActivity() {
     private fun downloadAndInstallUpdate() {
         val st = VpnStateManager.state.value
         val isFa = st.language == AppLanguage.FA
-        if (st.isDownloadingUpdate) return
-
-        val readyApk = cachedUpdateApk
-        if (readyApk != null && readyApk.exists() && readyApk.length() > 1_000_000L) {
-            if (!AppUpdater.canInstallPackages(this)) {
-                VpnStateManager.update {
-                    it.copy(updateStatusText = if (isFa) "مجوز نصب برنامه را فعال کرده و دوباره دکمه نصب را بزنید" else "Enable 'Install unknown apps' then tap Install again")
-                }
-                AppUpdater.openInstallPermissionSettings(this)
-                return
-            }
-            runCatching { AppUpdater.launchApkInstaller(this, readyApk) }
-            return
-        }
-
         if (st.updateUrl.isBlank()) {
             checkAppUpdate(silent = false)
             return
         }
-
-        updateJob?.cancel()
-        updateJob = lifecycleScope.launch(Dispatchers.IO) {
+        runCatching {
+            val intent = android.content.Intent(
+                android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse(st.updateUrl)
+            ).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
             VpnStateManager.update {
                 it.copy(
-                    isDownloadingUpdate = true,
-                    updateDownloadProgress = 0,
-                    updateStatusText = if (isFa) "در حال دانلود فایل آپدیت..." else "Downloading update..."
+                    updateStatusText = if (isFa) "دانلود در مرورگر آغاز شد" else "Download opened in browser"
                 )
             }
-            try {
-                val apk = AppUpdater.downloadApk(
-                    context = this@MainActivity,
-                    url = st.updateUrl,
-                    fileName = st.updateFileName
-                ) { pct ->
-                    VpnStateManager.update {
-                        it.copy(
-                            updateDownloadProgress = pct,
-                            updateStatusText = if (isFa) "در حال دانلود... $pct%" else "Downloading... $pct%"
-                        )
-                    }
-                }
-                cachedUpdateApk = apk
-                if (!AppUpdater.canInstallPackages(this@MainActivity)) {
-                    VpnStateManager.update {
-                        it.copy(
-                            isDownloadingUpdate = false,
-                            updateDownloadProgress = 100,
-                            updateStatusText = if (isFa) "دانلود کامل شد • مجوز نصب را فعال کنید و مجدد نصب را بزنید" else "Downloaded • Enable install permission then tap Install"
-                        )
-                    }
-                    runOnUiThread { AppUpdater.openInstallPermissionSettings(this@MainActivity) }
-                } else {
-                    VpnStateManager.update {
-                        it.copy(
-                            isDownloadingUpdate = false,
-                            updateDownloadProgress = 100,
-                            updateStatusText = if (isFa) "آماده نصب • پنجره نصب باز شد" else "Ready • Installer launched"
-                        )
-                    }
-                    runOnUiThread {
-                        runCatching { AppUpdater.launchApkInstaller(this@MainActivity, apk) }
-                    }
-                }
-            } catch (e: Throwable) {
-                VpnStateManager.update {
-                    it.copy(
-                        isDownloadingUpdate = false,
-                        updateStatusText = if (isFa) "خطا در دانلود: ${e.message ?: "نامشخص"}" else "Download failed: ${e.message ?: "unknown"}"
-                    )
-                }
+        }.onFailure { e ->
+            VpnStateManager.update {
+                it.copy(
+                    updateStatusText = if (isFa) "خطا در باز کردن لینک: ${e.message ?: "نامشخص"}" else "Failed to open link: ${e.message ?: "unknown"}"
+                )
             }
         }
     }
