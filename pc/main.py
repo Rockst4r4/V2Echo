@@ -3,6 +3,8 @@ import base64
 import hashlib
 import ipaddress
 import json
+import urllib.request
+import ssl
 import os
 import platform
 import re
@@ -987,13 +989,53 @@ class EcholicenseApi:
         except Exception:
             return 0
 
-    def _fetch_update_metadata(self) -> dict | None:
-        headers = {"User-Agent": f"Echolicense-PC/{APP_VERSION}"}
+    def _http_fetch_json(self, url: str, timeout: int = 12) -> dict:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "application/json, */*",
+            "Cache-Control": "no-cache",
+        }
+        last_err = None
+        try:
+            import requests
+            for verify_flag in (True, False):
+                for no_proxy in (False, True):
+                    try:
+                        kw = {"headers": headers, "timeout": timeout, "verify": verify_flag}
+                        if no_proxy:
+                            kw["proxies"] = {"http": "", "https": ""}
+                        r = requests.get(url, **kw)
+                        r.raise_for_status()
+                        return r.json()
+                    except Exception as e:
+                        last_err = e
+        except ImportError:
+            pass
+
+        for ctx in (ssl.create_default_context(), ssl._create_unverified_context()):
+            for no_proxy in (False, True):
+                try:
+                    req = urllib.request.Request(url, headers=headers)
+                    if no_proxy:
+                        opener = urllib.request.build_opener(
+                            urllib.request.ProxyHandler({}),
+                            urllib.request.HTTPSHandler(context=ctx),
+                        )
+                        with opener.open(req, timeout=timeout) as resp:
+                            return json.loads(resp.read().decode("utf-8"))
+                    else:
+                        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                            return json.loads(resp.read().decode("utf-8"))
+                except Exception as e:
+                    last_err = e
+
+        raise RuntimeError(str(last_err or "network error"))
+
+    def _fetch_update_metadata(self) -> tuple[dict | None, str]:
+        errs = []
         try:
             url = f"https://app.echolicense.ai/downloads/latest.json?t={int(time.time() // 60)}"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            data = self._http_fetch_json(url, timeout=12)
             tag = data.get("tag") or ""
             win = data.get("windows") or {}
             rel_url = win.get("url") or ""
@@ -1005,14 +1047,13 @@ class EcholicenseApi:
                     "name": win.get("name") or f"Echolicense-Windows-Setup-{tag}.exe",
                     "sizeMb": float(win.get("size_mb") or 0.0),
                     "updatedAt": win.get("updated_at") or "",
-                }
-        except Exception:
-            pass
+                }, ""
+            errs.append("empty latest.json")
+        except Exception as e:
+            errs.append(f"site: {type(e).__name__}")
 
         try:
-            req = urllib.request.Request("https://api.github.com/repos/Rockst4r4/V2Echo/releases/latest", headers=headers)
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                rel = json.loads(resp.read().decode("utf-8"))
+            rel = self._http_fetch_json("https://api.github.com/repos/Rockst4r4/V2Echo/releases/latest", timeout=12)
             tag = rel.get("tag_name") or ""
             for a in rel.get("assets") or []:
                 nm = a.get("name") or ""
@@ -1023,10 +1064,12 @@ class EcholicenseApi:
                         "name": nm,
                         "sizeMb": round(int(a.get("size") or 0) / 1048576.0, 1),
                         "updatedAt": a.get("updated_at") or "",
-                    }
-        except Exception:
-            pass
-        return None
+                    }, ""
+            errs.append("no exe asset")
+        except Exception as e:
+            errs.append(f"gh: {type(e).__name__}")
+
+        return None, " | ".join(errs)[:70]
 
     def check_app_update(self, silent: bool = False) -> dict:
         with self._update_lock:
@@ -1037,13 +1080,14 @@ class EcholicenseApi:
                 self._update_state["statusFa"] = "در حال بررسی آخرین نسخه..."
                 self._update_state["statusEn"] = "Checking for updates..."
 
-        info = self._fetch_update_metadata()
+        info, err_msg = self._fetch_update_metadata()
         with self._update_lock:
             self._update_state["checking"] = False
             if not info:
                 if not silent:
-                    self._update_state["statusFa"] = "خطا در ارتباط با سرور آپدیت"
-                    self._update_state["statusEn"] = "Failed to reach update server"
+                    detail = f" ({err_msg})" if err_msg else ""
+                    self._update_state["statusFa"] = f"خطا در ارتباط با سرور آپدیت{detail}"
+                    self._update_state["statusEn"] = f"Failed to reach update server{detail}"
             else:
                 r_ver = self._ver_tuple(info["tag"])
                 l_ver = self._ver_tuple(APP_VERSION)
@@ -1067,8 +1111,8 @@ class EcholicenseApi:
             url = self._update_state.get("downloadUrl") or ""
             fname = self._update_state.get("fileName") or "Echolicense-Update.exe"
             if not url:
-                self._update_state["statusFa"] = "ابتدا بررسی نسخه را بزنید"
-                self._update_state["statusEn"] = "Check for updates first"
+                self._update_state["statusFa"] = "ابتدا دکمه رفرش را بزنید"
+                self._update_state["statusEn"] = "Click refresh to check first"
                 return self.get_state()
             self._update_state["downloading"] = True
             self._update_state["progress"] = 0
@@ -1082,24 +1126,58 @@ class EcholicenseApi:
         import tempfile
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", fname) or "Echolicense-Update.exe"
         dest = Path(tempfile.gettempdir()) / safe
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        }
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": f"Echolicense-PC-Updater/{APP_VERSION}"})
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                total = int(resp.headers.get("Content-Length") or 0)
-                done = 0
-                with open(dest, "wb") as fh:
-                    while True:
-                        chunk = resp.read(65536)
-                        if not chunk:
-                            break
-                        fh.write(chunk)
-                        done += len(chunk)
-                        if total > 0:
-                            pct = min(100, int(done * 100 / total))
-                            with self._update_lock:
-                                self._update_state["progress"] = pct
-                                self._update_state["statusFa"] = f"در حال دانلود... {pct}%"
-                                self._update_state["statusEn"] = f"Downloading... {pct}%"
+            downloaded = False
+            try:
+                import requests
+                for verify_flag in (True, False):
+                    try:
+                        with requests.get(url, headers=headers, stream=True, timeout=45, verify=verify_flag) as resp:
+                            resp.raise_for_status()
+                            total = int(resp.headers.get("Content-Length") or 0)
+                            done = 0
+                            with open(dest, "wb") as fh:
+                                for chunk in resp.iter_content(chunk_size=65536):
+                                    if not chunk:
+                                        continue
+                                    fh.write(chunk)
+                                    done += len(chunk)
+                                    if total > 0:
+                                        pct = min(100, int(done * 100 / total))
+                                        with self._update_lock:
+                                            self._update_state["progress"] = pct
+                                            self._update_state["statusFa"] = f"در حال دانلود... {pct}%"
+                                            self._update_state["statusEn"] = f"Downloading... {pct}%"
+                        downloaded = True
+                        break
+                    except Exception:
+                        if not verify_flag:
+                            raise
+            except ImportError:
+                pass
+
+            if not downloaded:
+                req = urllib.request.Request(url, headers=headers)
+                ctx = ssl._create_unverified_context()
+                with urllib.request.urlopen(req, timeout=45, context=ctx) as resp:
+                    total = int(resp.headers.get("Content-Length") or 0)
+                    done = 0
+                    with open(dest, "wb") as fh:
+                        while True:
+                            chunk = resp.read(65536)
+                            if not chunk:
+                                break
+                            fh.write(chunk)
+                            done += len(chunk)
+                            if total > 0:
+                                pct = min(100, int(done * 100 / total))
+                                with self._update_lock:
+                                    self._update_state["progress"] = pct
+                                    self._update_state["statusFa"] = f"در حال دانلود... {pct}%"
+                                    self._update_state["statusEn"] = f"Downloading... {pct}%"
 
             if not dest.exists() or dest.stat().st_size < 5_000_000:
                 raise RuntimeError("Downloaded installer file is invalid")
