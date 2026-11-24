@@ -1385,7 +1385,10 @@ private fun LivePingQualityCard(uiState: VpnUiState) {
         directPingMs = uiState.directPingMs,
         directJitterMs = uiState.directJitterMs,
         vpnPingMs = uiState.vpnPingMs,
-        vpnJitterMs = uiState.vpnJitterMs
+        vpnJitterMs = uiState.vpnJitterMs,
+        serverName = uiState.activeServer?.name,
+        directHistory = uiState.directPingHistory,
+        vpnHistory = uiState.vpnPingHistory
     )
     val qualityColor = when (report.level) {
         "excellent" -> EmeraldGlow
@@ -1477,7 +1480,7 @@ private fun LivePingQualityCard(uiState: VpnUiState) {
             val deltaText = buildString {
                 if (report.deltaPingMs != null) {
                     val sign = if (report.deltaPingMs >= 0) "+" else ""
-                    append(if (isFa) "اختلاف پینگ: ${sign}${report.deltaPingMs}ms" else "Delta: ${sign}${report.deltaPingMs}ms")
+                    append(if (isFa) "تأخیر مسیر: ${sign}${report.deltaPingMs}ms" else "Route Δ: ${sign}${report.deltaPingMs}ms")
                     if (report.deltaJitterMs != null) {
                         val jSign = if (report.deltaJitterMs >= 0) "+" else ""
                         append(if (isFa) " • نوسان: ${jSign}${report.deltaJitterMs}ms" else " • Jitter Δ: ${jSign}${report.deltaJitterMs}ms")

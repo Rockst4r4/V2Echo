@@ -646,7 +646,7 @@ function render(st) {
   let vText = isFa ? (lp.qualityFa || 'در حال بررسی...') : (lp.qualityEn || 'Checking...');
   if (isConn && lp.deltaMs !== null && lp.deltaMs !== undefined) {
     const sgn = lp.deltaMs >= 0 ? '+' : '';
-    let dPart = isFa ? `اختلاف پینگ: ${sgn}${lp.deltaMs}ms` : `Delta: ${sgn}${lp.deltaMs}ms`;
+    let dPart = isFa ? `تأخیر مسیر: ${sgn}${lp.deltaMs}ms` : `Route Δ: ${sgn}${lp.deltaMs}ms`;
     if (lp.deltaJitter !== null && lp.deltaJitter !== undefined) {
       const jSgn = lp.deltaJitter >= 0 ? '+' : '';
       dPart += isFa ? ` • نوسان: ${jSgn}${lp.deltaJitter}ms` : ` • Jitter Δ: ${jSgn}${lp.deltaJitter}ms`;

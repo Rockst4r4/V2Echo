@@ -7,6 +7,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 data class PingQualityReport(
@@ -211,77 +212,140 @@ object LivePingMonitor {
         return (sum / (valid.size - 1)).roundToInt()
     }
 
+    private val FAR_FLAGS = listOf("🇺🇸", "🇨🇦", "🇧🇷", "🇦🇷", "🇲🇽", "🇯🇵", "🇸🇬", "🇰🇷", "🇦🇺", "🇭🇰")
+    private val NEAR_FLAGS = listOf("🇩🇪", "🇳🇱", "🇨🇭", "🇬🇧", "🇫🇷", "🇫🇮", "🇸🇪", "🇵🇱", "🇦🇹", "🇮🇹", "🇪🇸", "🇹🇷", "🇦🇪")
+
+    private val FAR_WORDS = Regex(
+        "(^|[^a-zA-Z])(us|usa|ca|jp|sg|au|kr|br)([^a-zA-Z]|$)|united\\s*states|america|canada|brazil|japan|singapore|australia|korea|hong\\s*kong|new\\s*york|los\\s*angeles|dallas|miami|chicago|seattle|ashburn|virginia|washington|california|texas|silicon|toronto|montreal|vancouver|tokyo|seoul|sydney|آمریکا|امریکا|کانادا|ژاپن|سنگاپور|استرالیا|برزیل|کره|نیویورک|شیکاگو|دالاس",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val NEAR_WORDS = Regex(
+        "(^|[^a-zA-Z])(de|nl|ch|uk|tr|ae|fr|fi|se|at)([^a-zA-Z]|$)|germany|frankfurt|falkenstein|nuremberg|netherlands|amsterdam|switzerland|zurich|london|england|france|paris|finland|helsinki|sweden|poland|austria|vienna|italy|spain|turkey|istanbul|uae|dubai|emirates|آلمان|المان|فرانکفورت|هلند|سوئیس|سوییس|انگلیس|لندن|فرانسه|فنلاند|ترکیه|استانبول|امارات|دبی",
+        RegexOption.IGNORE_CASE
+    )
+
+    private fun isFarServer(name: String?): Boolean {
+        if (name.isNullOrBlank()) return false
+        if (FAR_FLAGS.any { name.contains(it) }) return true
+        return FAR_WORDS.containsMatchIn(name)
+    }
+
+    private fun isNearServer(name: String?): Boolean {
+        if (name.isNullOrBlank()) return false
+        if (NEAR_FLAGS.any { name.contains(it) }) return true
+        return NEAR_WORDS.containsMatchIn(name)
+    }
+
+    private fun smoothedPing(history: List<Int>, current: Int): Int {
+        val valid = history.filter { it > 0 }.takeLast(4)
+        if (valid.isEmpty()) return current
+        return (valid.sum().toDouble() / valid.size).roundToInt()
+    }
+
     fun evaluateQuality(
         isConnected: Boolean,
         directPingMs: Int,
         directJitterMs: Int,
         vpnPingMs: Int,
-        vpnJitterMs: Int
+        vpnJitterMs: Int,
+        serverName: String? = null,
+        directHistory: List<Int> = emptyList(),
+        vpnHistory: List<Int> = emptyList()
     ): PingQualityReport {
+        val dMs = smoothedPing(directHistory, directPingMs)
+        val vMs = smoothedPing(vpnHistory, vpnPingMs)
         val deltaPing = if (isConnected && directPingMs > 0 && vpnPingMs > 0) vpnPingMs - directPingMs else null
         val deltaJitter = if (isConnected && directJitterMs >= 0 && vpnJitterMs >= 0) vpnJitterMs - directJitterMs else null
 
-        if (directPingMs <= 0 && (!isConnected || vpnPingMs <= 0)) {
+        if (dMs <= 0 && (!isConnected || vMs <= 0)) {
             return PingQualityReport(0, "offline", "در حال تست / عدم پاسخ 1.1.1.1", "Probing / 1.1.1.1 Unreachable", null, null)
         }
 
         if (!isConnected) {
             val j = directJitterMs.coerceAtLeast(0)
             return when {
-                directPingMs <= 70 && j <= 12 ->
-                    PingQualityReport(94, "excellent", "اینترنت کاربر عالی و پایدار", "User ISP: Excellent & Stable", null, null)
-                directPingMs <= 130 && j <= 28 ->
-                    PingQualityReport(78, "good", "اینترنت کاربر خوب (آماده اتصال)", "User ISP: Good (Ready)", null, null)
-                directPingMs <= 220 && j <= 55 ->
-                    PingQualityReport(52, "fair", "نوسان متوسط روی اینترنت کاربر", "User ISP: Moderate Jitter", null, null)
+                dMs <= 95 && j <= 15 ->
+                    PingQualityReport(95, "excellent", "اینترنت کاربر عالی و پایدار", "User ISP: Excellent & Stable", null, null)
+                dMs <= 150 && j <= 30 ->
+                    PingQualityReport(82, "good", "اینترنت کاربر خوب (آماده اتصال)", "User ISP: Good (Ready)", null, null)
+                dMs <= 225 && j <= 50 ->
+                    PingQualityReport(56, "fair", "نوسان متوسط روی اینترنت کاربر", "User ISP: Moderate Jitter", null, null)
                 else ->
-                    PingQualityReport(24, "poor", "اختلال و نوسان بالا روی اینترنت کاربر", "User ISP: High Instability", null, null)
+                    PingQualityReport(28, "poor", "اختلال و نوسان بالا روی اینترنت کاربر", "User ISP: High Instability", null, null)
             }
         }
 
-        if (vpnPingMs <= 0) {
-            return PingQualityReport(35, "fair", "در حال سنجش پینگ داخل VPN...", "Measuring VPN ping...", null, null)
+        if (vMs <= 0) {
+            return PingQualityReport(40, "fair", "در حال سنجش پینگ داخل VPN...", "Measuring VPN ping...", null, null)
         }
 
         val dj = directJitterMs.coerceAtLeast(0)
         val vj = vpnJitterMs.coerceAtLeast(0)
 
-        if (directPingMs > 0 && (directPingMs > 180 || dj > 45)) {
+        if (dMs > 0 && (dMs > 230 || dj > 50)) {
+            val ispScore = (42 - max(0, dj - 50) / 2).coerceIn(20, 42)
             return PingQualityReport(
-                28,
+                ispScore,
                 "poor",
-                "افت کیفیت از اینترنت کاربر (نوسان نت پایه بالاست)",
-                "ISP Issue (High Base Jitter)",
+                "افت کیفیت از اینترنت پایه شماست (نوسان نت کاربر بالاست)",
+                "ISP Issue (High Base Latency/Jitter)",
                 deltaPing,
                 deltaJitter
             )
         }
 
-        if (deltaPing != null) {
-            val jOverhead = (deltaJitter ?: 0).coerceAtLeast(0)
-            return when {
-                deltaPing <= 90 && vpnPingMs <= 155 && vj <= 18 ->
-                    PingQualityReport(95, "excellent", "کیفیت عالی • پینگ و نوسان کاملاً پایدار", "Excellent • Stable Low Jitter", deltaPing, deltaJitter)
-                deltaPing <= 150 && vpnPingMs <= 235 && vj <= 35 ->
-                    PingQualityReport(78, "good", "کیفیت خوب • مسیر VPN پایدار", "Good • Stable VPN Route", deltaPing, deltaJitter)
-                deltaPing > 150 || jOverhead > 30 ->
-                    PingQualityReport(44, "fair", "اختلاف پینگ VPN زیاد است • تعویض سرور پیشنهاد می‌شود", "High VPN Delta • Switch Server", deltaPing, deltaJitter)
-                vpnPingMs > 320 || vj > 60 ->
-                    PingQualityReport(25, "poor", "کیفیت ضعیف • نوسان شدید اتصال", "Poor • High Latency/Jitter", deltaPing, deltaJitter)
-                else ->
-                    PingQualityReport(60, "fair", "کیفیت متوسط • قابل استفاده", "Fair • Moderate Quality", deltaPing, deltaJitter)
-            }
+        val explicitFar = isFarServer(serverName)
+        val explicitNear = !explicitFar && isNearServer(serverName)
+        val sDelta = if (dMs > 0) (vMs - dMs) else (vMs - 95)
+        val inferredFar = !explicitFar && !explicitNear && (sDelta in 90..215) && vj <= 24
+        val isLongDistance = explicitFar || inferredFar
+
+        val geoAllowance = when {
+            explicitFar -> 140
+            inferredFar -> 115
+            else -> 55
         }
 
+        val excessLatency = max(0, sDelta - geoAllowance)
+        val netJitter = if (directJitterMs >= 0) max(0, vj - dj / 2) else vj
+        val latPenalty = excessLatency * 0.35
+        val jitPenalty = max(0, netJitter - 14) * 1.35
+        val score = (96.0 - latPenalty - jitPenalty).roundToInt().coerceIn(22, 97)
+
         return when {
-            vpnPingMs <= 145 && vj <= 20 ->
-                PingQualityReport(92, "excellent", "اتصال VPN عالی و پایدار", "VPN: Excellent", null, null)
-            vpnPingMs <= 235 && vj <= 38 ->
-                PingQualityReport(76, "good", "اتصال VPN خوب", "VPN: Good", null, null)
-            vpnPingMs <= 320 ->
-                PingQualityReport(52, "fair", "اتصال VPN متوسط", "VPN: Fair", null, null)
-            else ->
-                PingQualityReport(26, "poor", "پینگ VPN بالاست", "VPN: High Ping", null, null)
+            score >= 85 -> PingQualityReport(
+                score,
+                "excellent",
+                if (isLongDistance) "کیفیت عالی (سرور دوربرد) • پایدار و بدون نوسان" else "کیفیت عالی • پینگ و نوسان کاملاً پایدار",
+                if (isLongDistance) "Excellent (Long-Distance) • Stable Low Jitter" else "Excellent • Stable Low Jitter",
+                deltaPing,
+                deltaJitter
+            )
+            score >= 68 -> PingQualityReport(
+                score,
+                "good",
+                if (isLongDistance) "کیفیت خوب (مسیر دوربرد) • اتصال پایدار" else "کیفیت خوب • مسیر VPN پایدار",
+                if (isLongDistance) "Good (Long-Distance) • Stable Route" else "Good • Stable VPN Route",
+                deltaPing,
+                deltaJitter
+            )
+            score >= 45 -> PingQualityReport(
+                score,
+                "fair",
+                if (vj > 38) "کیفیت متوسط • کمی نوسان در مسیر دیده می‌شود" else "کیفیت متوسط • برای پینگ کمتر سرور نزدیک‌تر انتخاب کنید",
+                if (vj > 38) "Fair • Moderate Route Jitter" else "Fair • Pick a closer server for lower ping",
+                deltaPing,
+                deltaJitter
+            )
+            else -> PingQualityReport(
+                score,
+                "poor",
+                "نوسان یا تأخیر مسیر بالاست • سرور نزدیک‌تر یا خلوت‌تر انتخاب کنید",
+                "High Route Jitter/Latency • Try a closer server",
+                deltaPing,
+                deltaJitter
+            )
         }
     }
 }

@@ -877,51 +877,127 @@ class EcholicenseApi:
         diffs = [abs(valid[i] - valid[i - 1]) for i in range(1, len(valid))]
         return int(round(sum(diffs) / len(diffs)))
 
+    _FAR_FLAGS = ("🇺🇸", "🇨🇦", "🇧🇷", "🇦🇷", "🇲🇽", "🇯🇵", "🇸🇬", "🇰🇷", "🇦🇺", "🇭🇰")
+    _NEAR_FLAGS = ("🇩🇪", "🇳🇱", "🇨🇭", "🇬🇧", "🇫🇷", "🇫🇮", "🇸🇪", "🇵🇱", "🇦🇹", "🇮🇹", "🇪🇸", "🇹🇷", "🇦🇪")
+    _FAR_RE = re.compile(
+        r"(^|[^a-zA-Z])(us|usa|ca|jp|sg|au|kr|br)([^a-zA-Z]|$)|united\s*states|america|canada|brazil|japan|singapore|australia|korea|hong\s*kong|new\s*york|los\s*angeles|dallas|miami|chicago|seattle|ashburn|virginia|washington|california|texas|silicon|toronto|montreal|vancouver|tokyo|seoul|sydney|آمریکا|امریکا|کانادا|ژاپن|سنگاپور|استرالیا|برزیل|کره|نیویورک|شیکاگو|دالاس",
+        re.I,
+    )
+    _NEAR_RE = re.compile(
+        r"(^|[^a-zA-Z])(de|nl|ch|uk|tr|ae|fr|fi|se|at)([^a-zA-Z]|$)|germany|frankfurt|falkenstein|nuremberg|netherlands|amsterdam|switzerland|zurich|london|england|france|paris|finland|helsinki|sweden|poland|austria|vienna|italy|spain|turkey|istanbul|uae|dubai|emirates|آلمان|المان|فرانکفورت|هلند|سوئیس|سوییس|انگلیس|لندن|فرانسه|فنلاند|ترکیه|استانبول|امارات|دبی",
+        re.I,
+    )
+
+    @classmethod
+    def _is_far_server(cls, name: str) -> bool:
+        if not name:
+            return False
+        if any(f in name for f in cls._FAR_FLAGS):
+            return True
+        return bool(cls._FAR_RE.search(name))
+
+    @classmethod
+    def _is_near_server(cls, name: str) -> bool:
+        if not name:
+            return False
+        if any(f in name for f in cls._NEAR_FLAGS):
+            return True
+        return bool(cls._NEAR_RE.search(name))
+
     @staticmethod
-    def _eval_quality(is_conn: bool, d_ms: int, d_jit: int, v_ms: int, v_jit: int) -> dict:
+    def _smoothed_ping(history: list[int] | None, current: int) -> int:
+        valid = [x for x in (history or []) if x > 0][-4:]
+        if not valid:
+            return current
+        return int(round(sum(valid) / len(valid)))
+
+    @classmethod
+    def _eval_quality(
+        cls,
+        is_conn: bool,
+        d_ms: int,
+        d_jit: int,
+        v_ms: int,
+        v_jit: int,
+        srv_name: str = "",
+        d_hist: list[int] | None = None,
+        v_hist: list[int] | None = None,
+    ) -> dict:
+        sd_ms = cls._smoothed_ping(d_hist, d_ms)
+        sv_ms = cls._smoothed_ping(v_hist, v_ms)
         delta_ms = (v_ms - d_ms) if (is_conn and d_ms > 0 and v_ms > 0) else None
         delta_jit = (v_jit - d_jit) if (is_conn and d_jit >= 0 and v_jit >= 0) else None
 
-        if d_ms <= 0 and (not is_conn or v_ms <= 0):
+        if sd_ms <= 0 and (not is_conn or sv_ms <= 0):
             return {"score": 0, "level": "offline", "fa": "در حال تست / عدم پاسخ 1.1.1.1", "en": "Probing / 1.1.1.1 Unreachable", "deltaMs": None, "deltaJitter": None}
 
         if not is_conn:
             j = max(0, d_jit)
-            if d_ms <= 70 and j <= 12:
-                return {"score": 94, "level": "excellent", "fa": "اینترنت کاربر عالی و پایدار", "en": "User ISP: Excellent & Stable", "deltaMs": None, "deltaJitter": None}
-            if d_ms <= 130 and j <= 28:
-                return {"score": 78, "level": "good", "fa": "اینترنت کاربر خوب (آماده اتصال)", "en": "User ISP: Good (Ready)", "deltaMs": None, "deltaJitter": None}
-            if d_ms <= 220 and j <= 55:
-                return {"score": 52, "level": "fair", "fa": "نوسان متوسط روی اینترنت کاربر", "en": "User ISP: Moderate Jitter", "deltaMs": None, "deltaJitter": None}
-            return {"score": 24, "level": "poor", "fa": "اختلال و نوسان بالا روی اینترنت کاربر", "en": "User ISP: High Instability", "deltaMs": None, "deltaJitter": None}
+            if sd_ms <= 95 and j <= 15:
+                return {"score": 95, "level": "excellent", "fa": "اینترنت کاربر عالی و پایدار", "en": "User ISP: Excellent & Stable", "deltaMs": None, "deltaJitter": None}
+            if sd_ms <= 150 and j <= 30:
+                return {"score": 82, "level": "good", "fa": "اینترنت کاربر خوب (آماده اتصال)", "en": "User ISP: Good (Ready)", "deltaMs": None, "deltaJitter": None}
+            if sd_ms <= 225 and j <= 50:
+                return {"score": 56, "level": "fair", "fa": "نوسان متوسط روی اینترنت کاربر", "en": "User ISP: Moderate Jitter", "deltaMs": None, "deltaJitter": None}
+            return {"score": 28, "level": "poor", "fa": "اختلال و نوسان بالا روی اینترنت کاربر", "en": "User ISP: High Instability", "deltaMs": None, "deltaJitter": None}
 
-        if v_ms <= 0:
-            return {"score": 35, "level": "fair", "fa": "در حال سنجش پینگ داخل VPN...", "en": "Measuring VPN ping...", "deltaMs": None, "deltaJitter": None}
+        if sv_ms <= 0:
+            return {"score": 40, "level": "fair", "fa": "در حال سنجش پینگ داخل VPN...", "en": "Measuring VPN ping...", "deltaMs": None, "deltaJitter": None}
 
         dj = max(0, d_jit)
         vj = max(0, v_jit)
-        if d_ms > 0 and (d_ms > 180 or dj > 45):
-            return {"score": 28, "level": "poor", "fa": "افت کیفیت از اینترنت کاربر (نوسان نت پایه بالاست)", "en": "ISP Issue (High Base Jitter)", "deltaMs": delta_ms, "deltaJitter": delta_jit}
+        if sd_ms > 0 and (sd_ms > 230 or dj > 50):
+            isp_score = max(20, min(42, 42 - max(0, dj - 50) // 2))
+            return {"score": isp_score, "level": "poor", "fa": "افت کیفیت از اینترنت پایه شماست (نوسان نت کاربر بالاست)", "en": "ISP Issue (High Base Latency/Jitter)", "deltaMs": delta_ms, "deltaJitter": delta_jit}
 
-        if delta_ms is not None:
-            j_over = max(0, delta_jit or 0)
-            if delta_ms <= 90 and v_ms <= 155 and vj <= 18:
-                return {"score": 95, "level": "excellent", "fa": "کیفیت عالی • پینگ و نوسان کاملاً پایدار", "en": "Excellent • Stable Low Jitter", "deltaMs": delta_ms, "deltaJitter": delta_jit}
-            if delta_ms <= 150 and v_ms <= 235 and vj <= 35:
-                return {"score": 78, "level": "good", "fa": "کیفیت خوب • مسیر VPN پایدار", "en": "Good • Stable VPN Route", "deltaMs": delta_ms, "deltaJitter": delta_jit}
-            if delta_ms > 150 or j_over > 30:
-                return {"score": 44, "level": "fair", "fa": "اختلاف پینگ VPN زیاد است • تعویض سرور پیشنهاد می‌شود", "en": "High VPN Delta • Switch Server", "deltaMs": delta_ms, "deltaJitter": delta_jit}
-            if v_ms > 320 or vj > 60:
-                return {"score": 25, "level": "poor", "fa": "کیفیت ضعیف • نوسان شدید اتصال", "en": "Poor • High Latency/Jitter", "deltaMs": delta_ms, "deltaJitter": delta_jit}
-            return {"score": 60, "level": "fair", "fa": "کیفیت متوسط • قابل استفاده", "en": "Fair • Moderate Quality", "deltaMs": delta_ms, "deltaJitter": delta_jit}
+        explicit_far = cls._is_far_server(srv_name)
+        explicit_near = (not explicit_far) and cls._is_near_server(srv_name)
+        s_delta = (sv_ms - sd_ms) if sd_ms > 0 else (sv_ms - 95)
+        inferred_far = (not explicit_far) and (not explicit_near) and (90 <= s_delta <= 215) and (vj <= 24)
+        is_long_dist = explicit_far or inferred_far
 
-        if v_ms <= 145 and vj <= 20:
-            return {"score": 92, "level": "excellent", "fa": "اتصال VPN عالی و پایدار", "en": "VPN: Excellent", "deltaMs": None, "deltaJitter": None}
-        if v_ms <= 235 and vj <= 38:
-            return {"score": 76, "level": "good", "fa": "اتصال VPN خوب", "en": "VPN: Good", "deltaMs": None, "deltaJitter": None}
-        if v_ms <= 320:
-            return {"score": 52, "level": "fair", "fa": "اتصال VPN متوسط", "en": "VPN: Fair", "deltaMs": None, "deltaJitter": None}
-        return {"score": 26, "level": "poor", "fa": "پینگ VPN بالاست", "en": "VPN: High Ping", "deltaMs": None, "deltaJitter": None}
+        geo_allowance = 140 if explicit_far else (115 if inferred_far else 55)
+        excess_lat = max(0, s_delta - geo_allowance)
+        net_jit = max(0, vj - dj // 2) if d_jit >= 0 else vj
+        lat_pen = excess_lat * 0.35
+        jit_pen = max(0, net_jit - 14) * 1.35
+        score = max(22, min(97, int(round(96.0 - lat_pen - jit_pen))))
+
+        if score >= 85:
+            return {
+                "score": score,
+                "level": "excellent",
+                "fa": "کیفیت عالی (سرور دوربرد) • پایدار و بدون نوسان" if is_long_dist else "کیفیت عالی • پینگ و نوسان کاملاً پایدار",
+                "en": "Excellent (Long-Distance) • Stable Low Jitter" if is_long_dist else "Excellent • Stable Low Jitter",
+                "deltaMs": delta_ms,
+                "deltaJitter": delta_jit,
+            }
+        if score >= 68:
+            return {
+                "score": score,
+                "level": "good",
+                "fa": "کیفیت خوب (مسیر دوربرد) • اتصال پایدار" if is_long_dist else "کیفیت خوب • مسیر VPN پایدار",
+                "en": "Good (Long-Distance) • Stable Route" if is_long_dist else "Good • Stable VPN Route",
+                "deltaMs": delta_ms,
+                "deltaJitter": delta_jit,
+            }
+        if score >= 45:
+            return {
+                "score": score,
+                "level": "fair",
+                "fa": "کیفیت متوسط • کمی نوسان در مسیر دیده می‌شود" if vj > 38 else "کیفیت متوسط • برای پینگ کمتر سرور نزدیک‌تر انتخاب کنید",
+                "en": "Fair • Moderate Route Jitter" if vj > 38 else "Fair • Pick a closer server for lower ping",
+                "deltaMs": delta_ms,
+                "deltaJitter": delta_jit,
+            }
+        return {
+            "score": score,
+            "level": "poor",
+            "fa": "نوسان یا تأخیر مسیر بالاست • سرور نزدیک‌تر یا خلوت‌تر انتخاب کنید",
+            "en": "High Route Jitter/Latency • Try a closer server",
+            "deltaMs": delta_ms,
+            "deltaJitter": delta_jit,
+        }
 
     def _live_ping_loop(self):
         time.sleep(0.4)
@@ -949,7 +1025,18 @@ class EcholicenseApi:
 
                 d_jit = self._calc_jitter(self._direct_hist)
                 v_jit = self._calc_jitter(self._vpn_hist) if is_conn else -1
-                q = self._eval_quality(is_conn, d_ms, d_jit, v_ms if is_conn else -1, v_jit)
+                active_srv = self._get_active_server() if is_conn else None
+                srv_name = (active_srv or {}).get("name") or ""
+                q = self._eval_quality(
+                    is_conn,
+                    d_ms,
+                    d_jit,
+                    v_ms if is_conn else -1,
+                    v_jit,
+                    srv_name=srv_name,
+                    d_hist=self._direct_hist,
+                    v_hist=self._vpn_hist if is_conn else [],
+                )
 
                 with self._ping_lock:
                     self._live_ping = {
@@ -969,25 +1056,6 @@ class EcholicenseApi:
             except Exception:
                 pass
             time.sleep(2.5)
-
-    @staticmethod
-    def _ver_tuple(raw: str) -> tuple[int, ...]:
-        clean = (raw or "").strip().lower().lstrip("v")
-        out = []
-        for part in clean.split("."):
-            digits = "".join(ch for ch in part if ch.isdigit())
-            out.append(int(digits) if digits else 0)
-        return tuple(out) or (0,)
-
-    @staticmethod
-    def _parse_iso_epoch(raw: str) -> int:
-        if not raw:
-            return 0
-        try:
-            from datetime import datetime
-            return int(datetime.fromisoformat(raw.strip().replace("Z", "+00:00")).timestamp())
-        except Exception:
-            return 0
 
     def _http_fetch_json(self, url: str, timeout: int = 12) -> dict:
         headers = {
