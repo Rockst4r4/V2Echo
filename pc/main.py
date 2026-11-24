@@ -1532,6 +1532,80 @@ class EcholicenseApi:
 
         raise RuntimeError("Unable to reach subscription server")
 
+    def _fetch_sub_text_and_headers(self, url: str) -> tuple[str, dict]:
+        from urllib.parse import urlparse, urlunparse, quote
+        parsed = urlparse(url.strip())
+        host = parsed.hostname or ""
+        base_headers = dict(get_device_headers())
+        base_headers.setdefault("User-Agent", "v2rayNG/1.9.15")
+        base_headers["Accept"] = "*/*"
+        base_headers["Cache-Control"] = "no-cache"
+
+        # 1. تلاش استاندارد روی IPv4 (بدون پروکسی معلق)
+        for no_proxy in (False, True):
+            try:
+                kw = {"headers": base_headers, "timeout": 14, "allow_redirects": True}
+                if no_proxy:
+                    kw["proxies"] = {"http": "", "https": ""}
+                r = requests.get(url.strip(), **kw)
+                r.raise_for_status()
+                if r.text and r.text.strip():
+                    return r.text, dict(r.headers)
+            except Exception:
+                pass
+
+        # 2. دور زدن DNS مودم (مخابرات/فیبر نوری) از طریق DoH مستقیم به 1.1.1.1 و 8.8.8.8
+        if host and not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+            for doh_url in (
+                f"https://1.1.1.1/dns-query?name={quote(host)}&type=A",
+                f"https://8.8.8.8/resolve?name={quote(host)}&type=A",
+            ):
+                try:
+                    dr = requests.get(
+                        doh_url,
+                        headers={"Accept": "application/dns-json", "User-Agent": "Mozilla/5.0"},
+                        proxies={"http": "", "https": ""},
+                        timeout=6,
+                    )
+                    ans = dr.json().get("Answer") or []
+                    ips = [a["data"].strip() for a in ans if a.get("type") == 1 and a.get("data")]
+                    for ip in ips:
+                        try:
+                            netloc = ip if not parsed.port else f"{ip}:{parsed.port}"
+                            ip_url = urlunparse(parsed._replace(netloc=netloc))
+                            h2 = dict(base_headers)
+                            h2["Host"] = host
+                            r = requests.get(
+                                ip_url,
+                                headers=h2,
+                                proxies={"http": "", "https": ""},
+                                verify=False,
+                                timeout=14,
+                                allow_redirects=True,
+                            )
+                            r.raise_for_status()
+                            if r.text and r.text.strip():
+                                return r.text, dict(r.headers)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+        # 3. اگر VPN روی سیستم متصل است، دریافت از طریق پروکسی محلی
+        if self._state.get("connectionState") == "CONNECTED" and self._active_port:
+            px = f"http://127.0.0.1:{self._active_port}"
+            r = requests.get(
+                url.strip(),
+                headers=base_headers,
+                proxies={"http": px, "https": px},
+                timeout=16,
+                allow_redirects=True,
+            )
+            r.raise_for_status()
+            return r.text, dict(r.headers)
+
+        raise RuntimeError("Unable to reach subscription server")
+
     def _sync_sub_url(self, url: str) -> dict:
         body_text, resp_headers = self._fetch_sub_text_and_headers(url)
         hdr = resp_headers.get("Subscription-Userinfo") or resp_headers.get("subscription-userinfo") or ""
