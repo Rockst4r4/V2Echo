@@ -35,6 +35,8 @@ import kotlinx.coroutines.Dispatchers
 import com.echolicense.vpn.core.LivePingMonitor
 import java.io.File
 import com.echolicense.vpn.core.AppUpdater
+import com.echolicense.vpn.core.UpdateCheckWorker
+import com.echolicense.vpn.core.AppUpdateNotifier
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -82,6 +84,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(AppUpdateNotifier.EXTRA_OPEN_UPDATE, false)) {
+            intent.removeExtra(AppUpdateNotifier.EXTRA_OPEN_UPDATE)
+            VpnStateManager.update { it.copy(openUpdateDialogRequest = true) }
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         idlePingJob?.cancel()
@@ -92,14 +103,16 @@ class MainActivity : ComponentActivity() {
                     VpnStateManager.update { st ->
                         if (st.connectionState == ConnectionState.CONNECTED) st
                         else {
-                            val nextHist = if (dMs > 0) (st.directPingHistory + dMs).takeLast(12) else st.directPingHistory
+                            val nextHist = if (dMs > 0) (st.directPingHistory + dMs).takeLast(16) else st.directPingHistory
                             st.copy(
                                 directPingMs = dMs,
                                 directJitterMs = LivePingMonitor.computeJitter(nextHist),
                                 directPingHistory = nextHist,
+                                directAttempts = (st.directAttempts + (dMs > 0)).takeLast(10),
                                 vpnPingMs = -1,
                                 vpnJitterMs = -1,
-                                vpnPingHistory = emptyList()
+                                vpnPingHistory = emptyList(),
+                                vpnAttempts = emptyList()
                             )
                         }
                     }
@@ -163,8 +176,13 @@ class MainActivity : ComponentActivity() {
         }
 
         AnnouncementWorker.schedule(this)
+        UpdateCheckWorker.schedule(this)
         lifecycleScope.launch { AnnouncementWorker.fetchAndProcess(this@MainActivity) }
         checkAppUpdate(silent = true)
+        if (intent?.getBooleanExtra(AppUpdateNotifier.EXTRA_OPEN_UPDATE, false) == true) {
+            intent.removeExtra(AppUpdateNotifier.EXTRA_OPEN_UPDATE)
+            VpnStateManager.update { it.copy(openUpdateDialogRequest = true) }
+        }
 
         if (activeSub != null) {
             SubscriptionAutoUpdateWorker.schedule(this, replace = false)
@@ -196,7 +214,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onSelectServer = { srv ->
                         val wasConnected = VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED
-                        VpnStateManager.update { it.copy(activeServer = srv) }
+                        VpnStateManager.update { it.copy(activeServer = srv, vpnPingMs = -1, vpnJitterMs = -1, vpnPingHistory = emptyList(), vpnAttempts = emptyList()) }
                         if (wasConnected) dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
                     },
                     onSmartPingClick = { runSmartPing() },
@@ -554,6 +572,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val info = AppUpdater.checkForUpdate(BuildConfig.VERSION_NAME, BuildConfig.BUILD_EPOCH)
+            if (info != null && info.hasUpdate) { AppUpdateNotifier.notifyIfNew(this@MainActivity, info) }
             VpnStateManager.update { st ->
                 val isFa = st.language == AppLanguage.FA
                 if (info == null) {

@@ -13,7 +13,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()?.let { 100 + it } ?: 100)
-        versionName = "1.9"
+        versionName = "1.9.1"
         buildConfigField("long", "BUILD_EPOCH", "${System.currentTimeMillis() / 1000L}L")
     }
 

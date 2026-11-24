@@ -282,15 +282,19 @@ class EcholicenseVpnService : VpnService() {
                 val vMs = vpnDeferred.await()
 
                 VpnStateManager.update { st ->
-                    val nextDirectHist = if (dMs > 0) (st.directPingHistory + dMs).takeLast(12) else st.directPingHistory
-                    val nextVpnHist = if (vMs > 0) (st.vpnPingHistory + vMs).takeLast(12) else st.vpnPingHistory
+                    val nextDirectHist = if (dMs > 0) (st.directPingHistory + dMs).takeLast(16) else st.directPingHistory
+                    val nextVpnHist = if (vMs > 0) (st.vpnPingHistory + vMs).takeLast(16) else st.vpnPingHistory
+                    val nextDirectAttempts = (st.directAttempts + (dMs > 0)).takeLast(10)
+                    val nextVpnAttempts = (st.vpnAttempts + (vMs > 0)).takeLast(10)
                     st.copy(
                         directPingMs = dMs,
                         directJitterMs = LivePingMonitor.computeJitter(nextDirectHist),
                         directPingHistory = nextDirectHist,
                         vpnPingMs = vMs,
                         vpnJitterMs = LivePingMonitor.computeJitter(nextVpnHist),
-                        vpnPingHistory = nextVpnHist
+                        vpnPingHistory = nextVpnHist,
+                        directAttempts = nextDirectAttempts,
+                        vpnAttempts = nextVpnAttempts
                     )
                 }
                 delay(2500)

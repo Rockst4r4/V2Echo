@@ -16,12 +16,27 @@ data class PingQualityReport(
     val labelFa: String,
     val labelEn: String,
     val deltaPingMs: Int?,
-    val deltaJitterMs: Int?
+    val deltaJitterMs: Int?,
+    val packetLossPct: Int = 0,
+    val congestionMs: Int = 0
 )
 
 object LivePingMonitor {
 
     private const val TIMEOUT_MS = 1400
+
+    private val FAR_FLAGS = listOf("🇺🇸", "🇨🇦", "🇧🇷", "🇦🇷", "🇲🇽", "🇯🇵", "🇸🇬", "🇰🇷", "🇦🇺", "🇭🇰")
+    private val NEAR_FLAGS = listOf("🇩🇪", "🇳🇱", "🇨🇭", "🇬🇧", "🇫🇷", "🇫🇮", "🇸🇪", "🇵🇱", "🇦🇹", "🇮🇹", "🇪🇸", "🇹🇷", "🇦🇪")
+
+    private val FAR_WORDS = Regex(
+        "(^|[^a-zA-Z])(us|usa|ca|jp|sg|au|kr|br)([^a-zA-Z]|$)|united\\s*states|america|canada|brazil|japan|singapore|australia|korea|hong\\s*kong|new\\s*york|los\\s*angeles|dallas|miami|chicago|seattle|ashburn|virginia|washington|california|texas|silicon|toronto|montreal|vancouver|tokyo|seoul|sydney|آمریکا|امریکا|کانادا|ژاپن|سنگاپور|استرالیا|برزیل|کره|نیویورک|شیکاگو|دالاس",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val NEAR_WORDS = Regex(
+        "(^|[^a-zA-Z])(de|nl|ch|uk|tr|ae|fr|fi|se|at)([^a-zA-Z]|$)|germany|frankfurt|falkenstein|nuremberg|netherlands|amsterdam|switzerland|zurich|london|england|france|paris|finland|helsinki|sweden|poland|austria|vienna|italy|spain|turkey|istanbul|uae|dubai|emirates|آلمان|المان|فرانکفورت|هلند|سوئیس|سوییس|انگلیس|لندن|فرانسه|فنلاند|ترکیه|استانبول|امارات|دبی",
+        RegexOption.IGNORE_CASE
+    )
 
     private fun readHttpHeaders(input: BufferedInputStream): String? {
         val sb = StringBuilder(256)
@@ -131,9 +146,6 @@ object LivePingMonitor {
         }
     }
 
-    /**
-     * پینگ مستقیم از اینترنت خام کاربر (خارج از تونل VPN)
-     */
     fun probeDirect1111(
         tcpProtector: ((Socket) -> Unit)? = null,
         udpProtector: ((DatagramSocket) -> Unit)? = null
@@ -202,28 +214,39 @@ object LivePingMonitor {
         return probeProxyTarget(port, "cp.cloudflare.com", "/generate_204")
     }
 
+    /**
+     * نوسان نرم‌شده به سبک RFC 3550 برای دقت بالاتر و حذف نویز لحظه‌ای
+     */
     fun computeJitter(samples: List<Int>): Int {
-        val valid = samples.filter { it > 0 }
+        val valid = samples.filter { it > 0 }.takeLast(12)
         if (valid.size < 2) return -1
-        var sum = 0.0
-        for (i in 1 until valid.size) {
-            sum += abs(valid[i] - valid[i - 1])
+        var ewma = abs(valid[1] - valid[0]).toDouble()
+        for (i in 2 until valid.size) {
+            val d = abs(valid[i] - valid[i - 1]).toDouble()
+            ewma = ewma * 0.70 + d * 0.30
         }
-        return (sum / (valid.size - 1)).roundToInt()
+        return ewma.roundToInt()
     }
 
-    private val FAR_FLAGS = listOf("🇺🇸", "🇨🇦", "🇧🇷", "🇦🇷", "🇲🇽", "🇯🇵", "🇸🇬", "🇰🇷", "🇦🇺", "🇭🇰")
-    private val NEAR_FLAGS = listOf("🇩🇪", "🇳🇱", "🇨🇭", "🇬🇧", "🇫🇷", "🇫🇮", "🇸🇪", "🇵🇱", "🇦🇹", "🇮🇹", "🇪🇸", "🇹🇷", "🇦🇪")
+    fun computePacketLoss(attempts: List<Boolean>): Int {
+        val window = attempts.takeLast(10)
+        if (window.size < 2) return 0
+        val failed = window.count { !it }
+        return ((failed * 100.0) / window.size).roundToInt().coerceIn(0, 100)
+    }
 
-    private val FAR_WORDS = Regex(
-        "(^|[^a-zA-Z])(us|usa|ca|jp|sg|au|kr|br)([^a-zA-Z]|$)|united\\s*states|america|canada|brazil|japan|singapore|australia|korea|hong\\s*kong|new\\s*york|los\\s*angeles|dallas|miami|chicago|seattle|ashburn|virginia|washington|california|texas|silicon|toronto|montreal|vancouver|tokyo|seoul|sydney|آمریکا|امریکا|کانادا|ژاپن|سنگاپور|استرالیا|برزیل|کره|نیویورک|شیکاگو|دالاس",
-        RegexOption.IGNORE_CASE
-    )
+    private fun medianPing(history: List<Int>, fallback: Int): Int {
+        val valid = history.filter { it > 0 }.takeLast(6).sorted()
+        if (valid.isEmpty()) return fallback
+        val mid = valid.size / 2
+        return if (valid.size % 2 == 1) valid[mid] else ((valid[mid - 1] + valid[mid]) / 2.0).roundToInt()
+    }
 
-    private val NEAR_WORDS = Regex(
-        "(^|[^a-zA-Z])(de|nl|ch|uk|tr|ae|fr|fi|se|at)([^a-zA-Z]|$)|germany|frankfurt|falkenstein|nuremberg|netherlands|amsterdam|switzerland|zurich|london|england|france|paris|finland|helsinki|sweden|poland|austria|vienna|italy|spain|turkey|istanbul|uae|dubai|emirates|آلمان|المان|فرانکفورت|هلند|سوئیس|سوییس|انگلیس|لندن|فرانسه|فنلاند|ترکیه|استانبول|امارات|دبی",
-        RegexOption.IGNORE_CASE
-    )
+    private fun sessionFloor(history: List<Int>, fallback: Int): Int {
+        val valid = history.filter { it > 0 }.sorted()
+        if (valid.isEmpty()) return fallback
+        return if (valid.size >= 4) valid[1] else valid.first()
+    }
 
     private fun isFarServer(name: String?): Boolean {
         if (name.isNullOrBlank()) return false
@@ -237,12 +260,6 @@ object LivePingMonitor {
         return NEAR_WORDS.containsMatchIn(name)
     }
 
-    private fun smoothedPing(history: List<Int>, current: Int): Int {
-        val valid = history.filter { it > 0 }.takeLast(4)
-        if (valid.isEmpty()) return current
-        return (valid.sum().toDouble() / valid.size).roundToInt()
-    }
-
     fun evaluateQuality(
         isConnected: Boolean,
         directPingMs: Int,
@@ -251,76 +268,115 @@ object LivePingMonitor {
         vpnJitterMs: Int,
         serverName: String? = null,
         directHistory: List<Int> = emptyList(),
-        vpnHistory: List<Int> = emptyList()
+        vpnHistory: List<Int> = emptyList(),
+        directAttempts: List<Boolean> = emptyList(),
+        vpnAttempts: List<Boolean> = emptyList()
     ): PingQualityReport {
-        val dMs = smoothedPing(directHistory, directPingMs)
-        val vMs = smoothedPing(vpnHistory, vpnPingMs)
-        val deltaPing = if (isConnected && directPingMs > 0 && vpnPingMs > 0) vpnPingMs - directPingMs else null
+        val dMed = medianPing(directHistory, directPingMs)
+        val vMed = medianPing(vpnHistory, vpnPingMs)
+        val dFloor = sessionFloor(directHistory, dMed)
+        val vFloor = sessionFloor(vpnHistory, vMed)
+        val dLoss = computePacketLoss(directAttempts)
+        val vLoss = if (isConnected) computePacketLoss(vpnAttempts) else 0
+
+        val deltaPing = if (isConnected && dMed > 0 && vMed > 0) vMed - dMed else null
         val deltaJitter = if (isConnected && directJitterMs >= 0 && vpnJitterMs >= 0) vpnJitterMs - directJitterMs else null
 
-        if (dMs <= 0 && (!isConnected || vMs <= 0)) {
-            return PingQualityReport(0, "offline", "در حال تست / عدم پاسخ 1.1.1.1", "Probing / 1.1.1.1 Unreachable", null, null)
+        val directDead = directAttempts.takeLast(3).let { it.size == 3 && it.all { ok -> !ok } }
+        val vpnDead = isConnected && vpnAttempts.takeLast(3).let { it.size == 3 && it.all { ok -> !ok } }
+
+        if ((!isConnected && (directDead || dMed <= 0)) || (isConnected && vpnDead && directDead)) {
+            return PingQualityReport(0, "offline", "عدم پاسخ از 1.1.1.1 (قطعی اینترنت)", "1.1.1.1 Unreachable (Offline)", null, null, if (isConnected) vLoss else dLoss, 0)
         }
 
         if (!isConnected) {
             val j = directJitterMs.coerceAtLeast(0)
+            val dCong = if (dMed > 0 && dFloor > 0) max(0, dMed - dFloor) else 0
+            val latPen = max(0, dMed - 95) * 0.28
+            val jitPen = max(0, j - 12) * 1.15
+            val congPen = max(0, dCong - 18) * 0.35
+            val lossPen = dLoss * 1.8
+            val score = (97.0 - latPen - jitPen - congPen - lossPen).roundToInt().coerceIn(12, 98)
+
             return when {
-                dMs <= 95 && j <= 15 ->
-                    PingQualityReport(95, "excellent", "اینترنت کاربر عالی و پایدار", "User ISP: Excellent & Stable", null, null)
-                dMs <= 150 && j <= 30 ->
-                    PingQualityReport(82, "good", "اینترنت کاربر خوب (آماده اتصال)", "User ISP: Good (Ready)", null, null)
-                dMs <= 225 && j <= 50 ->
-                    PingQualityReport(56, "fair", "نوسان متوسط روی اینترنت کاربر", "User ISP: Moderate Jitter", null, null)
-                else ->
-                    PingQualityReport(28, "poor", "اختلال و نوسان بالا روی اینترنت کاربر", "User ISP: High Instability", null, null)
+                dLoss >= 20 -> PingQualityReport(score.coerceAtMost(42), "poor", "پکت‌لاس بالا روی اینترنت کاربر", "User ISP: High Packet Loss", null, null, dLoss, dCong)
+                score >= 85 -> PingQualityReport(score, "excellent", "اینترنت کاربر عالی و پایدار", "User ISP: Excellent & Stable", null, null, dLoss, dCong)
+                score >= 68 -> PingQualityReport(score, "good", "اینترنت کاربر خوب (آماده اتصال)", "User ISP: Good (Ready)", null, null, dLoss, dCong)
+                score >= 45 -> PingQualityReport(score, "fair", "نوسان متوسط روی اینترنت کاربر", "User ISP: Moderate Jitter", null, null, dLoss, dCong)
+                else -> PingQualityReport(score, "poor", "اختلال و نوسان بالا روی اینترنت کاربر", "User ISP: High Instability", null, null, dLoss, dCong)
             }
         }
 
-        if (vMs <= 0) {
-            return PingQualityReport(40, "fair", "در حال سنجش پینگ داخل VPN...", "Measuring VPN ping...", null, null)
+        if (vpnDead) {
+            return PingQualityReport(12, "poor", "تونل VPN پاسخ نمی‌دهد • تعویض سرور لازم است", "VPN Tunnel Timeout • Switch Server", deltaPing, deltaJitter, vLoss, 0)
+        }
+
+        if (vMed <= 0) {
+            return PingQualityReport(40, "fair", "در حال سنجش دقیق پینگ داخل VPN...", "Measuring VPN ping...", null, null, vLoss, 0)
         }
 
         val dj = directJitterMs.coerceAtLeast(0)
         val vj = vpnJitterMs.coerceAtLeast(0)
+        val vCong = if (vFloor > 0) max(0, vMed - vFloor) else 0
 
-        if (dMs > 0 && (dMs > 230 || dj > 50)) {
-            val ispScore = (42 - max(0, dj - 50) / 2).coerceIn(20, 42)
+        // تشخیص دقیق اختلال از سمت اینترنت پایه کاربر (ISP)
+        if (dLoss >= 20 || (dMed > 0 && (dMed > 235 || dj > 48))) {
+            val ispScore = (44.0 - dLoss * 0.6 - max(0, dj - 48) * 0.5).roundToInt().coerceIn(14, 44)
             return PingQualityReport(
                 ispScore,
                 "poor",
-                "افت کیفیت از اینترنت پایه شماست (نوسان نت کاربر بالاست)",
-                "ISP Issue (High Base Latency/Jitter)",
+                "افت کیفیت از اینترنت پایه شماست (نوسان یا پکت‌لاس نت کاربر)",
+                "ISP Issue (Unstable Base Internet)",
                 deltaPing,
-                deltaJitter
+                deltaJitter,
+                max(dLoss, vLoss),
+                vCong
             )
         }
 
         val explicitFar = isFarServer(serverName)
         val explicitNear = !explicitFar && isNearServer(serverName)
-        val sDelta = if (dMs > 0) (vMs - dMs) else (vMs - 95)
-        val inferredFar = !explicitFar && !explicitNear && (sDelta in 90..215) && vj <= 24
+        val sDelta = if (dMed > 0) (vMed - dMed) else (vMed - 95)
+
+        // تشخیص هوشمند سرور دوربرد حتی بدون نام کشور (وقتی پینگ نزدیک به کف فیزیکی و پایدار باشد)
+        val inferredFar = !explicitFar && !explicitNear && (sDelta in 85..230) && vCong <= 22 && vj <= 20 && vLoss == 0
         val isLongDistance = explicitFar || inferredFar
 
         val geoAllowance = when {
-            explicitFar -> 140
-            inferredFar -> 115
-            else -> 55
+            explicitFar -> 150
+            inferredFar -> 135
+            else -> 65
         }
 
         val excessLatency = max(0, sDelta - geoAllowance)
         val netJitter = if (directJitterMs >= 0) max(0, vj - dj / 2) else vj
-        val latPenalty = excessLatency * 0.35
-        val jitPenalty = max(0, netJitter - 14) * 1.35
-        val score = (96.0 - latPenalty - jitPenalty).roundToInt().coerceIn(22, 97)
+        val latPenalty = excessLatency * 0.30
+        val congPenalty = max(0, vCong - 18) * 0.38
+        val jitPenalty = max(0, netJitter - 12) * 1.25
+        val lossPenalty = vLoss * 1.85
+
+        val score = (97.0 - latPenalty - congPenalty - jitPenalty - lossPenalty).roundToInt().coerceIn(12, 98)
 
         return when {
+            vLoss >= 20 -> PingQualityReport(
+                score.coerceAtMost(42),
+                "poor",
+                "پکت‌لاس روی مسیر VPN بالاست • سرور دیگری تست کنید",
+                "High VPN Packet Loss • Try another server",
+                deltaPing,
+                deltaJitter,
+                vLoss,
+                vCong
+            )
             score >= 85 -> PingQualityReport(
                 score,
                 "excellent",
                 if (isLongDistance) "کیفیت عالی (سرور دوربرد) • پایدار و بدون نوسان" else "کیفیت عالی • پینگ و نوسان کاملاً پایدار",
                 if (isLongDistance) "Excellent (Long-Distance) • Stable Low Jitter" else "Excellent • Stable Low Jitter",
                 deltaPing,
-                deltaJitter
+                deltaJitter,
+                vLoss,
+                vCong
             )
             score >= 68 -> PingQualityReport(
                 score,
@@ -328,23 +384,29 @@ object LivePingMonitor {
                 if (isLongDistance) "کیفیت خوب (مسیر دوربرد) • اتصال پایدار" else "کیفیت خوب • مسیر VPN پایدار",
                 if (isLongDistance) "Good (Long-Distance) • Stable Route" else "Good • Stable VPN Route",
                 deltaPing,
-                deltaJitter
+                deltaJitter,
+                vLoss,
+                vCong
             )
             score >= 45 -> PingQualityReport(
                 score,
                 "fair",
-                if (vj > 38) "کیفیت متوسط • کمی نوسان در مسیر دیده می‌شود" else "کیفیت متوسط • برای پینگ کمتر سرور نزدیک‌تر انتخاب کنید",
-                if (vj > 38) "Fair • Moderate Route Jitter" else "Fair • Pick a closer server for lower ping",
+                if (vCong > 40 || vj > 32) "کیفیت متوسط • کمی شلوغی یا نوسان روی مسیر" else "کیفیت متوسط • برای پینگ کمتر سرور نزدیک‌تر انتخاب کنید",
+                if (vCong > 40 || vj > 32) "Fair • Moderate Route Congestion/Jitter" else "Fair • Pick a closer server for lower ping",
                 deltaPing,
-                deltaJitter
+                deltaJitter,
+                vLoss,
+                vCong
             )
             else -> PingQualityReport(
                 score,
                 "poor",
-                "نوسان یا تأخیر مسیر بالاست • سرور نزدیک‌تر یا خلوت‌تر انتخاب کنید",
-                "High Route Jitter/Latency • Try a closer server",
+                "نوسان یا تراکم مسیر بالاست • سرور خلوت‌تر انتخاب کنید",
+                "High Congestion/Jitter • Switch to a less crowded server",
                 deltaPing,
-                deltaJitter
+                deltaJitter,
+                vLoss,
+                vCong
             )
         }
     }

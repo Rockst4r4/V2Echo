@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "1.9"
+  #define AppVersion "1.9.1"
 #endif
 #ifndef SourceDir
   #define SourceDir "release_pkg"

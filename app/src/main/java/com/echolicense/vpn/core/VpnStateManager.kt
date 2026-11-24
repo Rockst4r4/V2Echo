@@ -37,6 +37,8 @@ data class VpnUiState(
     val vpnPingMs: Int = -1,
     val vpnJitterMs: Int = -1,
     val vpnPingHistory: List<Int> = emptyList(),
+    val directAttempts: List<Boolean> = emptyList(),
+    val vpnAttempts: List<Boolean> = emptyList(),
     val updateAvailable: Boolean = false,
     val updateTag: String = "",
     val updateUrl: String = "",
@@ -46,6 +48,7 @@ data class VpnUiState(
     val isDownloadingUpdate: Boolean = false,
     val updateDownloadProgress: Int = 0,
     val updateStatusText: String = "",
+    val openUpdateDialogRequest: Boolean = false,
     val statusMessage: String = "Ready to connect"
 )
 
@@ -72,7 +75,8 @@ object VpnStateManager {
             connectedSeconds = 0,
             vpnPingMs = -1,
             vpnJitterMs = -1,
-            vpnPingHistory = emptyList()
+            vpnPingHistory = emptyList(),
+            vpnAttempts = emptyList()
         )
     }
 }

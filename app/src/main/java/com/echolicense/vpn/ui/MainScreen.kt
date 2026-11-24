@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.echolicense.vpn.core.LivePingMonitor
+import androidx.compose.runtime.LaunchedEffect
 import com.echolicense.vpn.core.VpnUiState
 import com.echolicense.vpn.BuildConfig
 import androidx.compose.material3.LinearProgressIndicator
@@ -73,6 +74,13 @@ fun MainScreen(
     var showDnsDialog by remember { mutableStateOf(false) }
     var showMuxDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(uiState.openUpdateDialogRequest) {
+        if (uiState.openUpdateDialogRequest) {
+            showUpdateDialog = true
+            com.echolicense.vpn.core.VpnStateManager.update { it.copy(openUpdateDialogRequest = false) }
+            if (!uiState.isDownloadingUpdate) onCheckUpdate()
+        }
+    }
 
     val visibleServers = remember(uiState.servers, uiState.aiProOnly, uiState.gamingOnly) {
         when {
@@ -1388,7 +1396,9 @@ private fun LivePingQualityCard(uiState: VpnUiState) {
         vpnJitterMs = uiState.vpnJitterMs,
         serverName = uiState.activeServer?.name,
         directHistory = uiState.directPingHistory,
-        vpnHistory = uiState.vpnPingHistory
+        vpnHistory = uiState.vpnPingHistory,
+        directAttempts = uiState.directAttempts,
+        vpnAttempts = uiState.vpnAttempts
     )
     val qualityColor = when (report.level) {
         "excellent" -> EmeraldGlow
@@ -1485,7 +1495,12 @@ private fun LivePingQualityCard(uiState: VpnUiState) {
                         val jSign = if (report.deltaJitterMs >= 0) "+" else ""
                         append(if (isFa) " • نوسان: ${jSign}${report.deltaJitterMs}ms" else " • Jitter Δ: ${jSign}${report.deltaJitterMs}ms")
                     }
+                    if (report.packetLossPct > 0) {
+                        append(if (isFa) " • پکت‌لاس: ${report.packetLossPct}%" else " • Loss: ${report.packetLossPct}%")
+                    }
                     append(" — ")
+                } else if (report.packetLossPct > 0) {
+                    append(if (isFa) "پکت‌لاس: ${report.packetLossPct}% — " else "Loss: ${report.packetLossPct}% — ")
                 }
                 append(if (isFa) report.labelFa else report.labelEn)
             }
