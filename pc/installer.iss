@@ -28,7 +28,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\EcholicenseVPN.exe
-CloseApplications=force
+CloseApplications=no
 RestartApplications=no
 #ifdef IconFile
 SetupIconFile={#IconFile}

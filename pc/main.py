@@ -1304,6 +1304,7 @@ class EcholicenseApi:
         return self.get_state()
 
     def _download_and_install_update(self, url: str, fname: str):
+        import ctypes
         import tempfile
         tmp_dir = Path(tempfile.gettempdir())
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", fname) or "Echolicense-Update.exe"
@@ -1368,36 +1369,63 @@ class EcholicenseApi:
 
             with self._update_lock:
                 self._update_state["progress"] = 100
-                self._update_state["statusFa"] = "در حال بستن برنامه و نصب خودکار..."
-                self._update_state["statusEn"] = "Closing app & installing update..."
+                self._update_state["statusFa"] = "در حال بستن برنامه و اجرای مستقل نصاب..."
+                self._update_state["statusEn"] = "Closing app & launching independent installer..."
 
             self.disconnect(keep_killswitch=False)
             time.sleep(0.3)
 
             if str(dest).lower().endswith(".exe"):
+                # پاکسازی کامل متغیرهای موقت PyInstaller تا نصاب و نسخه جدید وابسته به _MEI نباشند
+                clean_env = {}
+                for k, v in os.environ.items():
+                    ku = k.upper()
+                    if ku in ("_MEIPASS", "_MEIPASS2", "PYTHONHOME", "PYTHONPATH", "TCL_LIBRARY", "TK_LIBRARY"):
+                        continue
+                    if ku.startswith("_PYI_"):
+                        continue
+                    if ku == "PATH":
+                        parts = [seg for seg in v.split(os.pathsep) if "_MEI" not in seg.upper()]
+                        clean_env[k] = os.pathsep.join(parts)
+                    else:
+                        clean_env[k] = v
+                clean_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+
+                try:
+                    ctypes.windll.kernel32.SetDllDirectoryW(None)
+                except Exception:
+                    pass
+
                 args = [
                     "/SP-",
                     "/SILENT",
                     "/NORESTART",
-                    "/CLOSEAPPLICATIONS",
-                    "/FORCECLOSEAPPLICATIONS",
                     f"/LOG={log_path}",
                 ]
-                cflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+                CREATE_NEW_PROCESS_GROUP = 0x00000200
+                launched = False
+
                 try:
                     subprocess.Popen(
                         [str(dest)] + args,
                         cwd=str(tmp_dir),
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        creationflags=cflags,
+                        env=clean_env,
+                        creationflags=CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP,
                         close_fds=True,
                     )
+                    launched = True
                 except OSError:
-                    import ctypes
-                    arg_str = " ".join(f'"{a}"' if " " in a else a for a in args)
-                    ctypes.windll.shell32.ShellExecuteW(None, "runas", str(dest), arg_str, str(tmp_dir), 1)
+                    pass
+
+                if not launched:
+                    # اجرای مستقیم از طریق Desktop Explorer (کاملاً خارج از Job Object برنامه)
+                    subprocess.Popen(
+                        ["explorer.exe", str(dest)],
+                        cwd=str(tmp_dir),
+                        env=clean_env,
+                        close_fds=True,
+                    )
 
                 self._quitting = True
                 try:
@@ -1405,7 +1433,8 @@ class EcholicenseApi:
                         self._tray.stop()
                 except Exception:
                     pass
-                time.sleep(0.4)
+                # فرصت کافی برای بالا آمدن کامل فرآیند نصاب پیش از خروج برنامه
+                time.sleep(1.5)
                 os._exit(0)
             else:
                 os.startfile(str(dest))
