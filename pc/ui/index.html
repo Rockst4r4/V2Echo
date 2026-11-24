@@ -693,7 +693,7 @@ function render(st) {
     instBtn.disabled = !!u.downloading || !!u.checking || !u.downloadUrl;
     instBtn.textContent = u.downloading
       ? (uFa ? `در حال دانلود (${u.progress || 0}%)` : `Downloading (${u.progress || 0}%)`)
-      : (u.available ? (uFa ? 'دانلود و نصب خودکار' : 'Download & Install') : (uFa ? 'نصب مجدد' : 'Reinstall'));
+      : (u.available ? (uFa ? 'دانلود نسخه جدید' : 'Download Update') : (uFa ? 'دانلود مجدد' : 'Download Again'));
     document.getElementById('updCheckBtn').disabled = !!u.downloading || !!u.checking;
   }
 

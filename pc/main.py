@@ -1286,165 +1286,27 @@ class EcholicenseApi:
         return self.get_state()
 
     def start_app_update(self) -> dict:
+        import webbrowser
         with self._update_lock:
-            if self._update_state.get("downloading"):
-                return self.get_state()
-            url = self._update_state.get("downloadUrl") or ""
-            fname = self._update_state.get("fileName") or "Echolicense-Update.exe"
+            url = (self._update_state.get("downloadUrl") or "").strip()
             if not url:
-                self._update_state["statusFa"] = "ابتدا دکمه رفرش را بزنید"
-                self._update_state["statusEn"] = "Click refresh to check first"
-                return self.get_state()
-            self._update_state["downloading"] = True
+                url = "https://app.echolicense.ai/"
+            self._update_state["downloading"] = False
             self._update_state["progress"] = 0
-            self._update_state["statusFa"] = "در حال دانلود فایل نصبی..."
-            self._update_state["statusEn"] = "Downloading installer..."
+            self._update_state["statusFa"] = "لینک دانلود مستقیم در مرورگر باز شد"
+            self._update_state["statusEn"] = "Direct download opened in browser"
 
-        threading.Thread(target=self._download_and_install_update, args=(url, fname), daemon=True).start()
-        return self.get_state()
-
-    def _download_and_install_update(self, url: str, fname: str):
-        import ctypes
-        import tempfile
-        tmp_dir = Path(tempfile.gettempdir())
-        safe = re.sub(r"[^A-Za-z0-9._-]", "_", fname) or "Echolicense-Update.exe"
-        dest = tmp_dir / safe
-        log_path = tmp_dir / "echolicense_update_install.log"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Cache-Control": "no-cache",
-        }
         try:
-            downloaded = False
+            webbrowser.open(url)
+        except Exception:
             try:
-                import requests
-                for verify_flag in (True, False):
-                    try:
-                        with requests.get(url, headers=headers, stream=True, timeout=45, verify=verify_flag) as resp:
-                            resp.raise_for_status()
-                            total = int(resp.headers.get("Content-Length") or 0)
-                            done = 0
-                            with open(dest, "wb") as fh:
-                                for chunk in resp.iter_content(chunk_size=65536):
-                                    if not chunk:
-                                        continue
-                                    fh.write(chunk)
-                                    done += len(chunk)
-                                    if total > 0:
-                                        pct = min(100, int(done * 100 / total))
-                                        with self._update_lock:
-                                            self._update_state["progress"] = pct
-                                            self._update_state["statusFa"] = f"در حال دانلود... {pct}%"
-                                            self._update_state["statusEn"] = f"Downloading... {pct}%"
-                        downloaded = True
-                        break
-                    except Exception:
-                        if not verify_flag:
-                            raise
-            except ImportError:
-                pass
-
-            if not downloaded:
-                req = urllib.request.Request(url, headers=headers)
-                ctx = ssl._create_unverified_context()
-                with urllib.request.urlopen(req, timeout=45, context=ctx) as resp:
-                    total = int(resp.headers.get("Content-Length") or 0)
-                    done = 0
-                    with open(dest, "wb") as fh:
-                        while True:
-                            chunk = resp.read(65536)
-                            if not chunk:
-                                break
-                            fh.write(chunk)
-                            done += len(chunk)
-                            if total > 0:
-                                pct = min(100, int(done * 100 / total))
-                                with self._update_lock:
-                                    self._update_state["progress"] = pct
-                                    self._update_state["statusFa"] = f"در حال دانلود... {pct}%"
-                                    self._update_state["statusEn"] = f"Downloading... {pct}%"
-
-            if not dest.exists() or dest.stat().st_size < 5_000_000:
-                raise RuntimeError("Downloaded installer file is invalid")
-
-            with self._update_lock:
-                self._update_state["progress"] = 100
-                self._update_state["statusFa"] = "در حال بستن برنامه و اجرای مستقل نصاب..."
-                self._update_state["statusEn"] = "Closing app & launching independent installer..."
-
-            self.disconnect(keep_killswitch=False)
-            time.sleep(0.3)
-
-            if str(dest).lower().endswith(".exe"):
-                # پاکسازی کامل متغیرهای موقت PyInstaller تا نصاب و نسخه جدید وابسته به _MEI نباشند
-                clean_env = {}
-                for k, v in os.environ.items():
-                    ku = k.upper()
-                    if ku in ("_MEIPASS", "_MEIPASS2", "PYTHONHOME", "PYTHONPATH", "TCL_LIBRARY", "TK_LIBRARY"):
-                        continue
-                    if ku.startswith("_PYI_"):
-                        continue
-                    if ku == "PATH":
-                        parts = [seg for seg in v.split(os.pathsep) if "_MEI" not in seg.upper()]
-                        clean_env[k] = os.pathsep.join(parts)
-                    else:
-                        clean_env[k] = v
-                clean_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-
-                try:
-                    ctypes.windll.kernel32.SetDllDirectoryW(None)
-                except Exception:
-                    pass
-
-                args = [
-                    "/SP-",
-                    "/SILENT",
-                    "/NORESTART",
-                    f"/LOG={log_path}",
-                ]
-                CREATE_BREAKAWAY_FROM_JOB = 0x01000000
-                CREATE_NEW_PROCESS_GROUP = 0x00000200
-                launched = False
-
-                try:
-                    subprocess.Popen(
-                        [str(dest)] + args,
-                        cwd=str(tmp_dir),
-                        env=clean_env,
-                        creationflags=CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP,
-                        close_fds=True,
-                    )
-                    launched = True
-                except OSError:
-                    pass
-
-                if not launched:
-                    # اجرای مستقیم از طریق Desktop Explorer (کاملاً خارج از Job Object برنامه)
-                    subprocess.Popen(
-                        ["explorer.exe", str(dest)],
-                        cwd=str(tmp_dir),
-                        env=clean_env,
-                        close_fds=True,
-                    )
-
-                self._quitting = True
-                try:
-                    if self._tray:
-                        self._tray.stop()
-                except Exception:
-                    pass
-                # فرصت کافی برای بالا آمدن کامل فرآیند نصاب پیش از خروج برنامه
-                time.sleep(1.5)
-                os._exit(0)
-            else:
-                os.startfile(str(dest))
+                if os.name == "nt":
+                    os.startfile(url)
+            except Exception as exc:
                 with self._update_lock:
-                    self._update_state["downloading"] = False
-        except Exception as exc:
-            with self._update_lock:
-                self._update_state["downloading"] = False
-                self._update_state["statusFa"] = f"خطا در دانلود آپدیت: {exc}"
-                self._update_state["statusEn"] = f"Update failed: {exc}"
+                    self._update_state["statusFa"] = f"خطا در باز کردن مرورگر: {exc}"
+                    self._update_state["statusEn"] = f"Failed to open browser: {exc}"
+        return self.get_state()
 
     def _background_loops(self):
         time.sleep(1.5)
