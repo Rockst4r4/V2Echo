@@ -1305,8 +1305,10 @@ class EcholicenseApi:
 
     def _download_and_install_update(self, url: str, fname: str):
         import tempfile
+        tmp_dir = Path(tempfile.gettempdir())
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", fname) or "Echolicense-Update.exe"
-        dest = Path(tempfile.gettempdir()) / safe
+        dest = tmp_dir / safe
+        log_path = tmp_dir / "echolicense_update_install.log"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         }
@@ -1365,20 +1367,48 @@ class EcholicenseApi:
 
             with self._update_lock:
                 self._update_state["progress"] = 100
-                self._update_state["statusFa"] = "در حال اجرای نصاب و نصب خودکار..."
-                self._update_state["statusEn"] = "Launching installer..."
+                self._update_state["statusFa"] = "در حال بستن برنامه و نصب خودکار..."
+                self._update_state["statusEn"] = "Closing app & installing update..."
 
             self.disconnect(keep_killswitch=False)
-            time.sleep(0.4)
+            time.sleep(0.3)
+
             if str(dest).lower().endswith(".exe"):
-                subprocess.Popen([str(dest), "/SP-", "/SILENT", "/NORESTART"], close_fds=True)
-                time.sleep(0.6)
+                bat_path = tmp_dir / f"echolicense_updater_{os.getpid()}.cmd"
+                bat_lines = [
+                    "@echo off",
+                    "ping -n 3 127.0.0.1 >nul",
+                    "for /L %%i in (1,1,6) do (",
+                    '  tasklist /FI "IMAGENAME eq EcholicenseVPN.exe" 2>nul | find /I "EcholicenseVPN.exe" >nul',
+                    "  if errorlevel 1 goto :ready",
+                    "  if %%i GEQ 3 taskkill /F /IM EcholicenseVPN.exe >nul 2>&1",
+                    "  ping -n 2 127.0.0.1 >nul",
+                    ")",
+                    ":ready",
+                    "taskkill /F /IM sing-box.exe >nul 2>&1",
+                    "ping -n 2 127.0.0.1 >nul",
+                    f'start "" /WAIT "{dest}" /SP- /SILENT /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /LOG="{log_path}"',
+                    'del /f /q "%~f0" >nul 2>&1',
+                ]
+                bat_path.write_text("\r\n".join(bat_lines) + "\r\n", encoding="utf-8")
+
+                cflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+                subprocess.Popen(
+                    ["cmd.exe", "/c", str(bat_path)],
+                    cwd=str(tmp_dir),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=cflags,
+                    close_fds=True,
+                )
                 self._quitting = True
                 try:
                     if self._tray:
                         self._tray.stop()
                 except Exception:
                     pass
+                time.sleep(0.25)
                 os._exit(0)
             else:
                 os.startfile(str(dest))
