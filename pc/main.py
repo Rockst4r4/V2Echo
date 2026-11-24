@@ -1311,6 +1311,7 @@ class EcholicenseApi:
         log_path = tmp_dir / "echolicense_update_install.log"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Cache-Control": "no-cache",
         }
         try:
             downloaded = False
@@ -1374,24 +1375,30 @@ class EcholicenseApi:
             time.sleep(0.3)
 
             if str(dest).lower().endswith(".exe"):
+                args = [
+                    "/SP-",
+                    "/SILENT",
+                    "/NORESTART",
+                    "/CLOSEAPPLICATIONS",
+                    "/FORCECLOSEAPPLICATIONS",
+                    f"/LOG={log_path}",
+                ]
                 cflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                subprocess.Popen(
-                    [
-                        str(dest),
-                        "/SP-",
-                        "/SILENT",
-                        "/NORESTART",
-                        "/CLOSEAPPLICATIONS",
-                        "/FORCECLOSEAPPLICATIONS",
-                        f"/LOG={log_path}",
-                    ],
-                    cwd=str(tmp_dir),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=cflags,
-                    close_fds=True,
-                )
+                try:
+                    subprocess.Popen(
+                        [str(dest)] + args,
+                        cwd=str(tmp_dir),
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=cflags,
+                        close_fds=True,
+                    )
+                except OSError:
+                    import ctypes
+                    arg_str = " ".join(f'"{a}"' if " " in a else a for a in args)
+                    ctypes.windll.shell32.ShellExecuteW(None, "runas", str(dest), arg_str, str(tmp_dir), 1)
+
                 self._quitting = True
                 try:
                     if self._tray:
