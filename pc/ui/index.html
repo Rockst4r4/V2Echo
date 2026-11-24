@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Echolicense VPN v1.9.1</title>
+<title>Echolicense VPN v1.9.2</title>
 <style>
 :root {
   --bg-top: #112233;
@@ -258,7 +258,7 @@ body.connected .win-dot {
 <div class="win-titlebar">
   <div class="win-drag pywebview-drag-region">
     <span class="win-dot"></span>
-    <span>ECHOLICENSE VPN • v1.9.1</span>
+    <span>ECHOLICENSE VPN • v1.9.2</span>
   </div>
   <div class="win-controls">
     <button class="win-btn upd-btn" id="pcUpdateBtn" onclick="openUpdateModal()" title="Check for Updates">&#8635;<span class="upd-dot" id="pcUpdDot"></span></button>
@@ -513,7 +513,7 @@ body.connected .win-dot {
       <strong id="updModalTitle">App Update</strong>
       <span class="click" onclick="closeModal('updateModal')">✕</span>
     </div>
-    <div style="font-size:12px;color:var(--muted)" id="updCurrentVer">Current version: v1.9.1</div>
+    <div style="font-size:12px;color:var(--muted)" id="updCurrentVer">Current version: v1.9.2</div>
     <div style="font-size:13px;font-weight:700;color:var(--cyan);margin-top:4px" id="updLatestVer">Latest on server: --</div>
     <div style="font-size:12px;margin-top:8px;line-height:1.5" id="updStatusText">Checking...</div>
     <div class="upd-prog-bg" id="updProgBg"><div class="upd-prog-fill" id="updProgFill"></div></div>
@@ -677,7 +677,7 @@ function render(st) {
   if (uTitle) {
     const uFa = st.language === 'fa';
     uTitle.textContent = uFa ? 'به‌روزرسانی اپلیکیشن' : 'App Update';
-    document.getElementById('updCurrentVer').textContent = uFa ? `نسخه فعلی: v${st.version || '1.9.1'}` : `Current version: v${st.version || '1.9.1'}`;
+    document.getElementById('updCurrentVer').textContent = uFa ? `نسخه فعلی: v${st.version || '1.9.2'}` : `Current version: v${st.version || '1.9.2'}`;
     const sz = u.sizeMb > 0 ? ` (${Number(u.sizeMb).toFixed(1)} MB)` : '';
     const latEl = document.getElementById('updLatestVer');
     latEl.textContent = u.latestTag

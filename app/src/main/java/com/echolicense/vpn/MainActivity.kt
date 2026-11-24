@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
         private const val KEY_LANG = "app_lang"
         private const val KEY_ADBLOCK = "adblock_enabled"
         private const val KEY_LAN_MIRROR = "lan_mirror_bypass"
+        private const val KEY_GPS_OVERRIDE = "ai_pro_gps_override"
         private const val KEY_SUBS_JSON = "saved_subscriptions_json"
         private const val KEY_ACTIVE_SUB_ID = "active_subscription_id"
         private const val KEY_MUX_ENABLED = "mux_enabled"
@@ -139,6 +140,7 @@ class MainActivity : ComponentActivity() {
         val savedLang = if (prefs.getString(KEY_LANG, "en") == "fa") AppLanguage.FA else AppLanguage.EN
         val savedAdBlock = prefs.getBoolean(KEY_ADBLOCK, true)
         val savedLanMirror = prefs.getBoolean(KEY_LAN_MIRROR, true)
+        val savedGpsOverride = prefs.getBoolean(KEY_GPS_OVERRIDE, true)
         val savedMtu = prefs.getInt(KEY_MTU, 1360).coerceIn(1200, 1500)
         val savedAutoMtu = prefs.getBoolean(KEY_AUTO_MTU, true)
         val savedManualDns = prefs.getString(KEY_MANUAL_DNS, "").orEmpty()
@@ -165,6 +167,7 @@ class MainActivity : ComponentActivity() {
                 language = savedLang,
                 adBlockerEnabled = savedAdBlock,
                 lanMirrorBypassEnabled = savedLanMirror,
+                aiProGpsOverrideEnabled = savedGpsOverride,
                 mtu = savedMtu,
                 autoMtuEnabled = savedAutoMtu,
                 manualDns = savedManualDns,
@@ -228,6 +231,16 @@ class MainActivity : ComponentActivity() {
                             dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
                         }
                     },
+                    onToggleGpsOverride = { enabled ->
+                        prefs.edit().putBoolean(KEY_GPS_OVERRIDE, enabled).apply()
+                        VpnStateManager.update {
+                            it.copy(
+                                aiProGpsOverrideEnabled = enabled,
+                                gpsOverrideNeedsSetup = if (!enabled) false else it.gpsOverrideNeedsSetup
+                            )
+                        }
+                    },
+                    onOpenDevOptions = { openMockLocationSettings() },
                     onCheckUpdate = { checkAppUpdate(silent = false) },
                     onDownloadInstallUpdate = { downloadAndInstallUpdate() },
                     onToggleAdBlocker = { enabled ->
@@ -571,14 +584,17 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
-            val info = AppUpdater.checkForUpdate(BuildConfig.VERSION_NAME, BuildConfig.BUILD_EPOCH)
+            val (info, errDetail) = AppUpdater.checkForUpdateDetailed(BuildConfig.VERSION_NAME, BuildConfig.BUILD_EPOCH, VpnStateManager.state.value.activeProbePort)
             if (info != null && info.hasUpdate) { AppUpdateNotifier.notifyIfNew(this@MainActivity, info) }
             VpnStateManager.update { st ->
                 val isFa = st.language == AppLanguage.FA
                 if (info == null) {
                     st.copy(
                         isCheckingUpdate = false,
-                        updateStatusText = if (silent) st.updateStatusText else (if (isFa) "خطا در ارتباط با سرور آپدیت" else "Failed to reach update server")
+                        updateStatusText = if (silent) st.updateStatusText else {
+                            val d = if (errDetail.isNotBlank()) " ($errDetail)" else ""
+                            if (isFa) "خطا در ارتباط با سرور آپدیت$d" else "Failed to reach update server$d"
+                        }
                     )
                 } else {
                     val msg = when {
@@ -623,6 +639,25 @@ class MainActivity : ComponentActivity() {
             VpnStateManager.update {
                 it.copy(
                     updateStatusText = if (isFa) "خطا در باز کردن لینک: ${e.message ?: "نامشخص"}" else "Failed to open link: ${e.message ?: "unknown"}"
+                )
+            }
+        }
+    }
+
+    private fun openMockLocationSettings() {
+        val devIntent = android.content.Intent(
+            android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS
+        ).apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { startActivity(devIntent) }.onFailure {
+            runCatching {
+                startActivity(
+                    android.content.Intent(
+                        android.provider.Settings.ACTION_DEVICE_INFO_SETTINGS
+                    ).apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
                 )
             }
         }

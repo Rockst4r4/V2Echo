@@ -20,6 +20,12 @@ data class VpnUiState(
     val manualDns: String = "",
     val iranSplitEnabled: Boolean = true,
     val lanMirrorBypassEnabled: Boolean = true,
+    val activeProbePort: Int = 0,
+    val aiProGpsOverrideEnabled: Boolean = true,
+    val gpsOverrideActive: Boolean = false,
+    val gpsOverrideNeedsSetup: Boolean = false,
+    val gpsOverrideLocationLabel: String = "",
+    val gpsOverrideCoords: String = "",
     val adBlockerEnabled: Boolean = true,
     val aiProOnly: Boolean = false,
     val gamingOnly: Boolean = false,
@@ -76,7 +82,12 @@ object VpnStateManager {
             vpnPingMs = -1,
             vpnJitterMs = -1,
             vpnPingHistory = emptyList(),
-            vpnAttempts = emptyList()
+            vpnAttempts = emptyList(),
+            activeProbePort = 0,
+            gpsOverrideActive = false,
+            gpsOverrideNeedsSetup = false,
+            gpsOverrideLocationLabel = "",
+            gpsOverrideCoords = ""
         )
     }
 }

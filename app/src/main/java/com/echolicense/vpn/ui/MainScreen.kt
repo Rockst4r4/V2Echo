@@ -54,6 +54,8 @@ fun MainScreen(
     onSmartPingClick: () -> Unit,
     onToggleIranSplit: (Boolean) -> Unit,
     onToggleLanMirrorBypass: (Boolean) -> Unit,
+    onToggleGpsOverride: (Boolean) -> Unit,
+    onOpenDevOptions: () -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadInstallUpdate: () -> Unit,
     onToggleAdBlocker: (Boolean) -> Unit,
@@ -455,6 +457,51 @@ fun MainScreen(
                             checked = uiState.lanMirrorBypassEnabled,
                             onCheckedChange = onToggleLanMirrorBypass,
                             colors = SwitchDefaults.colors(checkedTrackColor = CyanLiquid)
+                        )
+                    }
+
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(vertical = 4.dp)) {
+                            Text(s.gpsOverrideTitle, color = Color.White, fontSize = 13.sp)
+                            val isFaGps = uiState.language == AppLanguage.FA
+                            val gpsSubText = when {
+                                uiState.gpsOverrideActive && uiState.gpsOverrideLocationLabel.isNotBlank() ->
+                                    "📍 ${uiState.gpsOverrideLocationLabel} (${uiState.gpsOverrideCoords})"
+                                uiState.gpsOverrideNeedsSetup ->
+                                    if (isFaGps) "در Developer Options اپ Echolicense را به عنوان Mock Location انتخاب کنید"
+                                    else "Select Echolicense as Mock Location app in Developer Options"
+                                else -> s.gpsOverrideSub
+                            }
+                            val gpsSubColor = when {
+                                uiState.gpsOverrideActive -> EmeraldGlow
+                                uiState.gpsOverrideNeedsSetup -> Color(0xFFF59E0B)
+                                else -> Color.White.copy(alpha = 0.6f)
+                            }
+                            Text(gpsSubText, color = gpsSubColor, fontSize = 10.sp)
+                            if (uiState.gpsOverrideNeedsSetup) {
+                                TextButton(
+                                    onClick = onOpenDevOptions,
+                                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = if (isFaGps) "باز کردن Developer Options ↗" else "Open Developer Options ↗",
+                                        color = AiProAccent,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                        Switch(
+                            checked = uiState.aiProGpsOverrideEnabled,
+                            onCheckedChange = onToggleGpsOverride,
+                            colors = SwitchDefaults.colors(checkedTrackColor = AiProAccent)
                         )
                     }
 

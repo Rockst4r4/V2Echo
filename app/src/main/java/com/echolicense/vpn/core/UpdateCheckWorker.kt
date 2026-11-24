@@ -18,7 +18,7 @@ class UpdateCheckWorker(
 
     override suspend fun doWork(): Result {
         val info = runCatching {
-            AppUpdater.checkForUpdate(BuildConfig.VERSION_NAME, BuildConfig.BUILD_EPOCH)
+            AppUpdater.checkForUpdate(BuildConfig.VERSION_NAME, BuildConfig.BUILD_EPOCH, VpnStateManager.state.value.activeProbePort)
         }.getOrNull()
 
         if (info != null && info.hasUpdate) {

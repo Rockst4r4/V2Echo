@@ -1,16 +1,13 @@
 package com.echolicense.vpn.core
 
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings
-import androidx.core.content.FileProvider
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.io.File
-import java.io.FileOutputStream
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 
@@ -27,18 +24,39 @@ object AppUpdater {
     private const val SITE_BASE = "https://app.echolicense.ai"
     private const val META_URL = "$SITE_BASE/downloads/latest.json"
     private const val GH_API_URL = "https://api.github.com/repos/Rockst4r4/V2Echo/releases/latest"
+    private const val GH_WEB_LATEST = "https://github.com/Rockst4r4/V2Echo/releases/latest"
+    private const val BROWSER_UA =
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
+    private val ipv4FirstDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val all = Dns.SYSTEM.lookup(hostname)
+            val v4 = all.filterIsInstance<Inet4Address>()
+            val others = all.filterNot { it is Inet4Address }
+            return if (v4.isNotEmpty()) v4 + others else all
+        }
+    }
+
+    private fun buildClient(proxyPort: Int = 0, followRedirects: Boolean = true): OkHttpClient {
+        val builder = OkHttpClient.Builder()
+            .dns(ipv4FirstDns)
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(18, TimeUnit.SECONDS)
+            .followRedirects(followRedirects)
+            .followSslRedirects(followRedirects)
+        if (proxyPort > 0) {
+            builder.proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort)))
+        }
+        return builder.build()
+    }
 
     private fun parseVersionTuple(raw: String): List<Int> {
         val clean = raw.trim().lowercase().removePrefix("v")
-        return clean.split(".").map { part ->
+        val parts = clean.split(".").map { part ->
             part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
-        }
+        }.toMutableList()
+        while (parts.size < 3) parts.add(0)
+        return parts
     }
 
     private fun isNewerVersion(remoteTag: String, localVersion: String): Int {
@@ -58,26 +76,69 @@ object AppUpdater {
         return runCatching { Instant.parse(iso.trim()).epochSecond }.getOrDefault(0L)
     }
 
-    fun checkForUpdate(currentVersion: String, buildEpoch: Long): AppUpdateInfo? {
-        val fromSite = runCatching { fetchFromSite(currentVersion, buildEpoch) }.getOrNull()
-        if (fromSite != null) return fromSite
-        return runCatching { fetchFromGithub(currentVersion, buildEpoch) }.getOrNull()
+    fun checkForUpdate(currentVersion: String, buildEpoch: Long, proxyPort: Int = 0): AppUpdateInfo? {
+        return checkForUpdateDetailed(currentVersion, buildEpoch, proxyPort).first
     }
 
-    private fun fetchFromSite(currentVersion: String, buildEpoch: Long): AppUpdateInfo? {
+    fun checkForUpdateDetailed(
+        currentVersion: String,
+        buildEpoch: Long,
+        proxyPort: Int = 0
+    ): Pair<AppUpdateInfo?, String> {
+        val errs = mutableListOf<String>()
+        val portsToTry = if (proxyPort > 0) listOf(0, proxyPort) else listOf(0)
+
+        for (port in portsToTry) {
+            val routeTag = if (port > 0) "vpn" else "dir"
+            try {
+                val res = fetchFromSite(currentVersion, buildEpoch, port)
+                if (res != null) return res to ""
+                errs.add("site-$routeTag:empty")
+            } catch (e: Throwable) {
+                errs.add("site-$routeTag:${e.javaClass.simpleName}")
+            }
+        }
+
+        for (port in portsToTry) {
+            val routeTag = if (port > 0) "vpn" else "dir"
+            try {
+                val res = fetchFromGithubApi(currentVersion, buildEpoch, port)
+                if (res != null) return res to ""
+            } catch (e: Throwable) {
+                errs.add("gh-$routeTag:${e.javaClass.simpleName}")
+            }
+        }
+
+        for (port in portsToTry) {
+            val routeTag = if (port > 0) "vpn" else "dir"
+            try {
+                val res = fetchFromGithubRedirect(currentVersion, port)
+                if (res != null) return res to ""
+            } catch (e: Throwable) {
+                errs.add("web-$routeTag:${e.javaClass.simpleName}")
+            }
+        }
+
+        return null to errs.take(3).joinToString(" | ")
+    }
+
+    private fun fetchFromSite(currentVersion: String, buildEpoch: Long, proxyPort: Int): AppUpdateInfo? {
+        val client = buildClient(proxyPort)
         val req = Request.Builder()
             .url("$META_URL?t=${System.currentTimeMillis() / 60000L}")
-            .header("User-Agent", "Echolicense-Android/$currentVersion")
+            .header("User-Agent", BROWSER_UA)
+            .header("Accept", "application/json, */*")
+            .header("Cache-Control", "no-cache")
             .build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) return null
+            if (!resp.isSuccessful) error("HTTP ${resp.code}")
             val body = resp.body?.string().orEmpty()
             val root = JSONObject(body)
             val tag = root.optString("tag", "").ifBlank { return null }
             val androidObj = root.optJSONObject("android") ?: return null
             val relUrl = androidObj.optString("url", "").ifBlank { return null }
             val fullUrl = if (relUrl.startsWith("http")) relUrl else "$SITE_BASE$relUrl"
-            val name = androidObj.optString("name", "Echolicense-Android.apk")
+            val name = androidObj.optString("name", "Echolicense-Android-$tag.apk")
             val sizeMb = androidObj.optDouble("size_mb", 0.0)
             val updatedAt = androidObj.optString("updated_at", "")
             val cmp = isNewerVersion(tag, currentVersion)
@@ -87,13 +148,15 @@ object AppUpdater {
         }
     }
 
-    private fun fetchFromGithub(currentVersion: String, buildEpoch: Long): AppUpdateInfo? {
+    private fun fetchFromGithubApi(currentVersion: String, buildEpoch: Long, proxyPort: Int): AppUpdateInfo? {
+        val client = buildClient(proxyPort)
         val req = Request.Builder()
             .url(GH_API_URL)
-            .header("User-Agent", "Echolicense-Android/$currentVersion")
+            .header("User-Agent", BROWSER_UA)
+            .header("Accept", "application/vnd.github+json")
             .build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) return null
+            if (!resp.isSuccessful) error("HTTP ${resp.code}")
             val root = JSONObject(resp.body?.string().orEmpty())
             val tag = root.optString("tag_name", "").ifBlank { return null }
             val assets = root.optJSONArray("assets") ?: return null
@@ -102,7 +165,7 @@ object AppUpdater {
                 val name = a.optString("name", "")
                 if (name.endsWith(".apk", ignoreCase = true)) {
                     val url = a.optString("browser_download_url", "")
-                    val sizeMb = (a.optLong("size", 0L) / 1048576.0)
+                    val sizeMb = a.optLong("size", 0L) / 1048576.0
                     val updatedAt = a.optString("updated_at", "")
                     val cmp = isNewerVersion(tag, currentVersion)
                     val remoteEpoch = parseIsoEpoch(updatedAt)
@@ -114,79 +177,22 @@ object AppUpdater {
         }
     }
 
-    fun downloadApk(
-        context: Context,
-        url: String,
-        fileName: String,
-        onProgress: (Int) -> Unit
-    ): File {
-        val dir = File(context.cacheDir, "updates")
-        if (!dir.exists()) dir.mkdirs()
-        dir.listFiles()?.forEach { runCatching { it.delete() } }
-
-        val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "Echolicense-Update.apk" }
-        val outFile = File(dir, safeName)
-
+    private fun fetchFromGithubRedirect(currentVersion: String, proxyPort: Int): AppUpdateInfo? {
+        val client = buildClient(proxyPort, followRedirects = false)
         val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Echolicense-Android-Updater")
+            .url(GH_WEB_LATEST)
+            .header("User-Agent", BROWSER_UA)
             .build()
-
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("HTTP ${resp.code}")
-            val body = resp.body ?: error("Empty response")
-            val total = body.contentLength()
-            var copied = 0L
-            var lastPct = -1
-
-            body.byteStream().use { input ->
-                FileOutputStream(outFile).use { output ->
-                    val buf = ByteArray(16384)
-                    while (true) {
-                        val read = input.read(buf)
-                        if (read == -1) break
-                        output.write(buf, 0, read)
-                        copied += read
-                        if (total > 0L) {
-                            val pct = ((copied * 100L) / total).toInt().coerceIn(0, 100)
-                            if (pct != lastPct) {
-                                lastPct = pct
-                                onProgress(pct)
-                            }
-                        }
-                    }
-                    output.flush()
-                }
-            }
+            val loc = resp.header("Location").orEmpty()
+            val idx = loc.lastIndexOf("/tag/")
+            if (idx == -1) return null
+            val tag = loc.substring(idx + 5).substringBefore("?").trim()
+            if (tag.isBlank()) return null
+            val apkName = "Echolicense-Android-$tag.apk"
+            val dlUrl = "https://github.com/Rockst4r4/V2Echo/releases/download/$tag/$apkName"
+            val hasUpdate = isNewerVersion(tag, currentVersion) > 0
+            return AppUpdateInfo(tag, dlUrl, apkName, 0.0, "", hasUpdate)
         }
-        if (!outFile.exists() || outFile.length() < 1_000_000L) {
-            runCatching { outFile.delete() }
-            error("Downloaded APK is invalid")
-        }
-        onProgress(100)
-        return outFile
-    }
-
-    fun canInstallPackages(context: Context): Boolean {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
-    }
-
-    fun openInstallPermissionSettings(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                Uri.parse("package:${context.packageName}")
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-        }
-    }
-
-    fun launchApkInstaller(context: Context, apkFile: File) {
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
     }
 }

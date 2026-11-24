@@ -44,6 +44,7 @@ class EcholicenseVpnService : VpnService() {
     private var coreController: CoreController? = null
     private var telemetryJob: Job? = null
     private var pingJob: Job? = null
+    private var gpsJob: Job? = null
     private var connectJob: Job? = null
     private var notifJob: Job? = null
 
@@ -153,7 +154,9 @@ class EcholicenseVpnService : VpnService() {
                 val muxLabel = if (current.muxConfig.enabled) " • Mux" else ""
                 updateNotification("${server.name} • MTU: $finalMtu$muxLabel")
                 startTelemetryLoop()
+                VpnStateManager.update { it.copy(activeProbePort = probePort) }
                 startLivePingLoop(probePort)
+                startGpsOverrideLoop(probePort)
 
             } catch (e: CancellationException) {
                 throw e
@@ -237,6 +240,8 @@ class EcholicenseVpnService : VpnService() {
     private fun startTelemetryLoop() {
         telemetryJob?.cancel()
         pingJob?.cancel()
+        gpsJob?.cancel()
+        GpsOverrideManager.stop(this)
         telemetryJob = scope.launch {
             var lastRx = TrafficStats.getTotalRxBytes()
             var lastTx = TrafficStats.getTotalTxBytes()
@@ -298,6 +303,89 @@ class EcholicenseVpnService : VpnService() {
                     )
                 }
                 delay(2500)
+            }
+        }
+    }
+
+
+    private fun startGpsOverrideLoop(probePort: Int) {
+        gpsJob?.cancel()
+        gpsJob = scope.launch(Dispatchers.IO) {
+            var cachedServerKey: String? = null
+            var cachedGeo: VpnGeoLocation? = null
+            var lastResolveFailAt = 0L
+
+            try {
+                while (isActive && VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
+                    val st = VpnStateManager.state.value
+                    val shouldSpoof = st.aiProOnly && st.aiProGpsOverrideEnabled
+
+                    if (!shouldSpoof) {
+                        if (st.gpsOverrideActive || st.gpsOverrideNeedsSetup || st.gpsOverrideLocationLabel.isNotEmpty()) {
+                            GpsOverrideManager.stop(this@EcholicenseVpnService)
+                            VpnStateManager.update {
+                                it.copy(
+                                    gpsOverrideActive = false,
+                                    gpsOverrideNeedsSetup = false,
+                                    gpsOverrideLocationLabel = "",
+                                    gpsOverrideCoords = ""
+                                )
+                            }
+                        }
+                        delay(1000)
+                        continue
+                    }
+
+                    val curKey = st.activeServer?.toString() ?: ""
+                    if (cachedGeo == null || cachedServerKey != curKey) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastResolveFailAt >= 4000L) {
+                            val resolved = GpsOverrideManager.resolveVpnGeoLocation(probePort)
+                            if (resolved != null) {
+                                cachedGeo = resolved
+                                cachedServerKey = curKey
+                            } else {
+                                lastResolveFailAt = now
+                            }
+                        }
+                    }
+
+                    val geo = cachedGeo
+                    if (geo != null) {
+                        when (GpsOverrideManager.pushLocation(this@EcholicenseVpnService, geo)) {
+                            GpsPushResult.OK -> {
+                                VpnStateManager.update {
+                                    it.copy(
+                                        gpsOverrideActive = true,
+                                        gpsOverrideNeedsSetup = false,
+                                        gpsOverrideLocationLabel = geo.displayLabel(),
+                                        gpsOverrideCoords = geo.coordsLabel()
+                                    )
+                                }
+                                delay(1600)
+                            }
+                            GpsPushResult.NEEDS_MOCK_APP_SETUP -> {
+                                VpnStateManager.update {
+                                    it.copy(
+                                        gpsOverrideActive = false,
+                                        gpsOverrideNeedsSetup = true,
+                                        gpsOverrideLocationLabel = geo.displayLabel(),
+                                        gpsOverrideCoords = geo.coordsLabel()
+                                    )
+                                }
+                                delay(3500)
+                            }
+                            GpsPushResult.ERROR -> {
+                                VpnStateManager.update { it.copy(gpsOverrideActive = false) }
+                                delay(3000)
+                            }
+                        }
+                    } else {
+                        delay(2000)
+                    }
+                }
+            } finally {
+                GpsOverrideManager.stop(this@EcholicenseVpnService)
             }
         }
     }
