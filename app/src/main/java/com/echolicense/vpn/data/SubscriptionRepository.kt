@@ -2,37 +2,117 @@ package com.echolicense.vpn.data
 
 import android.content.Context
 import android.util.Base64
+import com.echolicense.vpn.core.VpnStateManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.Socket
 import java.net.URI
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class SubscriptionRepository {
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
+
+    private val ipv4SystemDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val all = Dns.SYSTEM.lookup(hostname)
+            val v4 = all.filterIsInstance<Inet4Address>()
+            return if (v4.isNotEmpty()) v4 + all.filterNot { it is Inet4Address } else all
+        }
+    }
+
+    // دور زدن DNS مسموم یا کندِ مودم‌های مخابرات از طریق DoH مستقیم روی IP
+    private val dohBootstrapClient = OkHttpClient.Builder()
+        .protocols(listOf(Protocol.HTTP_1_1))
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
         .build()
 
-    suspend fun fetchSubscription(
+    private val dohIpv4Dns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val resolved = resolveViaDoh(hostname)
+            if (resolved.isNotEmpty()) return resolved
+            return ipv4SystemDns.lookup(hostname)
+        }
+    }
+
+    private fun resolveViaDoh(hostname: String): List<InetAddress> {
+        val enc = runCatching { URLEncoder.encode(hostname, "UTF-8") }.getOrNull() ?: return emptyList()
+        val endpoints = listOf(
+            "https://1.1.1.1/dns-query?name=$enc&type=A",
+            "https://1.0.0.1/dns-query?name=$enc&type=A",
+            "https://8.8.8.8/resolve?name=$enc&type=A"
+        )
+        for (url in endpoints) {
+            val ips = runCatching {
+                val req = Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/dns-json")
+                    .header("User-Agent", "Mozilla/5.0")
+                    .build()
+                dohBootstrapClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use emptyList()
+                    val json = JSONObject(resp.body?.string().orEmpty())
+                    val ans = json.optJSONArray("Answer") ?: return@use emptyList()
+                    val list = mutableListOf<InetAddress>()
+                    for (i in 0 until ans.length()) {
+                        val rec = ans.getJSONObject(i)
+                        if (rec.optInt("type") == 1) {
+                            val ipStr = rec.optString("data").trim()
+                            if (ipStr.isNotEmpty()) {
+                                list.add(InetAddress.getByName(ipStr))
+                            }
+                        }
+                    }
+                    list
+                }
+            }.getOrDefault(emptyList())
+            if (ips.isNotEmpty()) return ips
+        }
+        return emptyList()
+    }
+
+    private fun buildSubClient(dns: Dns?, proxyPort: Int = 0, useHttp11: Boolean = true): OkHttpClient {
+        val b = OkHttpClient.Builder()
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(16, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+        if (useHttp11) {
+            b.protocols(listOf(Protocol.HTTP_1_1))
+        }
+        if (dns != null) {
+            b.dns(dns)
+        }
+        if (proxyPort > 0) {
+            b.proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort)))
+        }
+        return b.build()
+    }
+
+    private fun executeSubCall(
+        client: OkHttpClient,
         subUrl: String,
-        context: Context? = null
-    ): Pair<SubscriptionInfo, List<ServerProfile>> = withContext(Dispatchers.IO) {
+        context: Context?
+    ): Pair<SubscriptionInfo, List<ServerProfile>> {
         val reqBuilder = Request.Builder()
             .url(subUrl.trim())
             .header("User-Agent", "v2rayNG/1.9.15")
             .header("Accept", "*/*")
+            .header("Cache-Control", "no-cache")
 
         if (context != null) {
             DeviceInfoProvider.getDeviceHeaders(context).forEach { (k, v) ->
@@ -40,9 +120,9 @@ class SubscriptionRepository {
             }
         }
 
-        httpClient.newCall(reqBuilder.build()).execute().use { resp ->
+        client.newCall(reqBuilder.build()).execute().use { resp ->
             if (!resp.isSuccessful) {
-                throw IllegalStateException("خطای دریافت اشتراک (کد ${resp.code})")
+                throw IllegalStateException("کد خطای سرور: ${resp.code}")
             }
 
             val userInfoHeader = extractUserInfoFromResponseChain(resp)
@@ -56,8 +136,44 @@ class SubscriptionRepository {
             }
 
             val profiles = parseServerLines(decodedText)
-            subInfo to profiles
+            if (profiles.isEmpty()) {
+                throw IllegalStateException("پاسخ دریافت شد اما کانفیگی در آن نبود")
+            }
+            return subInfo to profiles
         }
+    }
+
+    suspend fun fetchSubscription(
+        subUrl: String,
+        context: Context? = null
+    ): Pair<SubscriptionInfo, List<ServerProfile>> = withContext(Dispatchers.IO) {
+        val probePort = VpnStateManager.state.value.activeProbePort
+        val attempts = buildList {
+            // 1. مستقیم با اولویت IPv4 و HTTP/1.1
+            add(buildSubClient(dns = ipv4SystemDns, proxyPort = 0, useHttp11 = true))
+            // 2. مستقیم با DoH مستقل (دور زدن DNS مخابرات / فیبر نوری)
+            add(buildSubClient(dns = dohIpv4Dns, proxyPort = 0, useHttp11 = true))
+            // 3. در صورت روشن بودن VPN، عبور از داخل تونل VPN
+            if (probePort > 0) {
+                add(buildSubClient(dns = null, proxyPort = probePort, useHttp11 = true))
+            }
+            // 4. کلاینت پیش‌فرض با ALPN کامل (H2 + HTTP/1.1)
+            add(buildSubClient(dns = dohIpv4Dns, proxyPort = 0, useHttp11 = false))
+        }
+
+        var lastError: Throwable? = null
+        for (client in attempts) {
+            try {
+                return@withContext executeSubCall(client, subUrl, context)
+            } catch (t: Throwable) {
+                lastError = t
+            }
+        }
+
+        val reason = lastError?.message?.takeIf { it.isNotBlank() }
+            ?: lastError?.javaClass?.simpleName
+            ?: "Timeout"
+        throw IllegalStateException("خطا در دریافت اشتراک ($reason)")
     }
 
     private fun extractUserInfoFromResponseChain(response: Response): String {
