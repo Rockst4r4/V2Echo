@@ -1374,27 +1374,17 @@ class EcholicenseApi:
             time.sleep(0.3)
 
             if str(dest).lower().endswith(".exe"):
-                bat_path = tmp_dir / f"echolicense_updater_{os.getpid()}.cmd"
-                bat_lines = [
-                    "@echo off",
-                    "ping -n 3 127.0.0.1 >nul",
-                    "for /L %%i in (1,1,6) do (",
-                    '  tasklist /FI "IMAGENAME eq EcholicenseVPN.exe" 2>nul | find /I "EcholicenseVPN.exe" >nul',
-                    "  if errorlevel 1 goto :ready",
-                    "  if %%i GEQ 3 taskkill /F /IM EcholicenseVPN.exe >nul 2>&1",
-                    "  ping -n 2 127.0.0.1 >nul",
-                    ")",
-                    ":ready",
-                    "taskkill /F /IM sing-box.exe >nul 2>&1",
-                    "ping -n 2 127.0.0.1 >nul",
-                    f'start "" /WAIT "{dest}" /SP- /SILENT /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /LOG="{log_path}"',
-                    'del /f /q "%~f0" >nul 2>&1',
-                ]
-                bat_path.write_text("\r\n".join(bat_lines) + "\r\n", encoding="utf-8")
-
-                cflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+                cflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 subprocess.Popen(
-                    ["cmd.exe", "/c", str(bat_path)],
+                    [
+                        str(dest),
+                        "/SP-",
+                        "/SILENT",
+                        "/NORESTART",
+                        "/CLOSEAPPLICATIONS",
+                        "/FORCECLOSEAPPLICATIONS",
+                        f"/LOG={log_path}",
+                    ],
                     cwd=str(tmp_dir),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
@@ -1408,7 +1398,7 @@ class EcholicenseApi:
                         self._tray.stop()
                 except Exception:
                     pass
-                time.sleep(0.25)
+                time.sleep(0.4)
                 os._exit(0)
             else:
                 os.startfile(str(dest))
