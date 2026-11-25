@@ -120,8 +120,10 @@ def start_singbox_tun_macos(singbox_bin: str, cfg_path: str, log_path: str, pid_
         return False, "Not macOS"
     for fp in (log_path, pid_path):
         try:
-            Path(fp).parent.mkdir(parents=True, exist_ok=True)
-            Path(fp).write_text("", encoding="utf-8")
+            p_fp = Path(fp)
+            p_fp.parent.mkdir(parents=True, exist_ok=True)
+            p_fp.unlink(missing_ok=True)
+            p_fp.write_text("", encoding="utf-8")
         except Exception:
             pass
     work_dir = str(Path(singbox_bin).resolve().parent)

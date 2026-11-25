@@ -1799,6 +1799,10 @@ class EcholicenseApi:
             else:
                 env = dict(os.environ)
                 env["NO_COLOR"] = "1"
+                try:
+                    self._log_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
                 self._log_fh = open(self._log_file, "w", encoding="utf-8", errors="replace")
                 self._proc = subprocess.Popen(
                     [str(singbox_bin), "run", "-c", str(cfg_path)],
