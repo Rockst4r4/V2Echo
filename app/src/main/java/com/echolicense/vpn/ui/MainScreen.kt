@@ -36,7 +36,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.ui.platform.LocalContext
-import com.echolicense.vpn.core.IpHealthReport
 import com.echolicense.vpn.core.ToolsDiagnosticsManager
 import com.echolicense.vpn.data.*
 import kotlinx.coroutines.Dispatchers
@@ -86,7 +85,6 @@ fun MainScreen(
     var showDnsDialog by remember { mutableStateOf(false) }
     var showMuxDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
-    var showToolsDialog by remember { mutableStateOf(false) }
     var showAppSplitDialog by remember { mutableStateOf(false) }
     var showAdvancedSettings by remember { mutableStateOf(false) }
     LaunchedEffect(uiState.openUpdateDialogRequest) {
@@ -145,17 +143,6 @@ fun MainScreen(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    LiquidGlassCard(
-                        cornerRadius = 14.dp,
-                        modifier = Modifier.bounceClick { showToolsDialog = true }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Build,
-                            contentDescription = "Tools",
-                            tint = CyanLiquid,
-                            modifier = Modifier.padding(8.dp).size(18.dp)
-                        )
-                    }
                     LiquidGlassCard(
                         cornerRadius = 14.dp,
                         highlightColor = if (uiState.updateAvailable) EmeraldGlow else GlassBorderTop,
@@ -781,14 +768,6 @@ fun MainScreen(
                 showDnsDialog = false
                 onSaveManualDns(it)
             }
-        )
-    }
-
-    if (showToolsDialog) {
-        ToolsDiagnosticsDialog(
-            uiState = uiState,
-            onDismiss = { showToolsDialog = false },
-            onOpenBot = onOpenBot
         )
     }
 
@@ -1884,154 +1863,6 @@ private fun AppUpdateDialog(
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !uiState.isDownloadingUpdate) {
                 Text(if (isFa) "بستن" else "Close", color = Color.White.copy(alpha = 0.7f))
-            }
-        }
-    )
-}
-
-
-@Composable
-private fun ToolsDiagnosticsDialog(
-    uiState: VpnUiState,
-    onDismiss: () -> Unit,
-    onOpenBot: () -> Unit
-) {
-    val isFa = uiState.language == AppLanguage.FA
-    val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    var checking by remember { mutableStateOf(false) }
-    var report by remember { mutableStateOf<IpHealthReport?>(null) }
-    var copiedMsg by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF0E1722),
-        titleContentColor = Color.White,
-        textContentColor = Color.White,
-        title = {
-            Text(
-                text = if (isFa) "ابزارها و عیب‌یابی سریع" else "Tools & Diagnostics",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // 1. IP & AI Health Check
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color.White.copy(alpha = 0.05f))
-                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = if (isFa) "تست سلامت IP و سرویس‌های هوش مصنوعی" else "IP & AI Services Health Check",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = CyanLiquid
-                    )
-                    if (report != null) {
-                        val rep = report!!
-                        Text("IP: ${rep.ip}", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
-                        Text("${rep.location} • ${rep.isp}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.72f))
-                        Spacer(Modifier.height(4.dp))
-                        rep.services.forEach { svc ->
-                            val col = when (svc.status) {
-                                "OK" -> EmeraldGlow
-                                "WARN" -> Color(0xFFF59E0B)
-                                else -> Color(0xFFFF5A6E)
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(svc.name, fontSize = 12.sp, color = Color.White)
-                                Text("${svc.status} (${svc.detail})", fontSize = 11.sp, color = col, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    } else {
-                        Text(
-                            text = if (isFa) "بررسی آی‌پی فعلی، کشور و دسترسی به ChatGPT، Gemini و Claude" else "Check active IP, country & access to ChatGPT, Gemini & Claude",
-                            fontSize = 11.sp,
-                            color = Color.White.copy(alpha = 0.65f)
-                        )
-                    }
-                    Button(
-                        onClick = {
-                            if (!checking) {
-                                checking = true
-                                scope.launch {
-                                    val res = withContext(Dispatchers.IO) {
-                                        ToolsDiagnosticsManager.runHealthCheck(uiState.activeProbePort)
-                                    }
-                                    report = res
-                                    checking = false
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = CyanLiquid.copy(alpha = 0.2f), contentColor = CyanLiquid)
-                    ) {
-                        if (checking) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = CyanLiquid)
-                            Spacer(Modifier.width(8.dp))
-                        }
-                        Text(if (checking) (if (isFa) "در حال بررسی..." else "Checking...") else (if (isFa) "شروع تست سلامت" else "Run Health Check"), fontSize = 12.sp)
-                    }
-                }
-
-                // 2. 1-Click Support Diagnostics
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color.White.copy(alpha = 0.05f))
-                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = if (isFa) "گزارش مشکل برای پشتیبانی (1-Click)" else "1-Click Support Diagnostics",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = EmeraldGlow
-                    )
-                    Text(
-                        text = if (isFa) "خلاصه فنی اتصال (بدون لینک اشتراک و اطلاعات محرمانه) کپی می‌شود تا برای پشتیبانی بفرستید." else "Copies a privacy-safe technical summary for fast troubleshooting.",
-                        fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.68f)
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(
-                            onClick = {
-                                val text = ToolsDiagnosticsManager.buildDiagnosticReport(uiState, BuildConfig.VERSION_NAME)
-                                clipboard.setText(AnnotatedString(text))
-                                copiedMsg = true
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldGlow.copy(alpha = 0.2f), contentColor = EmeraldGlow)
-                        ) {
-                            Text(if (copiedMsg) (if (isFa) "کپی شد ✓" else "Copied ✓") else (if (isFa) "کپی گزارش" else "Copy Report"), fontSize = 11.5.sp)
-                        }
-                        OutlinedButton(
-                            onClick = onOpenBot,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(if (isFa) "ارسال به ربات" else "Support Bot", fontSize = 11.5.sp, color = Color.White)
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(if (isFa) "بستن" else "Close", color = CyanLiquid)
             }
         }
     )

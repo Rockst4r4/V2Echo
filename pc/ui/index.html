@@ -283,7 +283,6 @@ body.connected .win-dot {
   </div>
   <div class="top-actions">
     <div class="glass icon-btn click" onclick="openModal('subsModal')">🔗 <span data-i18n="subs">Subs</span></div>
-    <div class="glass icon-btn click" onclick="openToolsModal()" title="Tools & Diagnostics">🛠️</div>
     <div class="glass icon-btn click" onclick="openModal('settingsModal')" title="Settings">⚙️</div>
   </div>
 </div>
@@ -529,25 +528,6 @@ body.connected .win-dot {
     <div class="row" style="gap:8px;margin-top:12px">
       <button class="btn" id="updInstallBtn" onclick="startPcUpdate()" style="flex:1">Download & Install</button>
       <button class="btn btn-outline" id="updCheckBtn" onclick="checkPcUpdate()" style="width:auto;padding:8px 12px">↻</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-bg" id="toolsModal">
-  <div class="modal">
-    <h2><span>🛠️ Tools & Diagnostics</span><span class="click" onclick="closeModal('toolsModal')">✕</span></h2>
-    <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:11px;margin-bottom:10px">
-      <div style="font-size:12px;font-weight:700;color:var(--cyan);margin-bottom:6px">IP & AI Health Check</div>
-      <div id="healthRes" style="font-size:11.5px;color:var(--muted);line-height:1.6;margin-bottom:8px">Check active IP, country & reachability of ChatGPT, Gemini and Claude.</div>
-      <button class="btn" id="healthRunBtn" onclick="runHealthCheck()" style="padding:8px">Run Health Check</button>
-    </div>
-    <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:11px">
-      <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:5px">1-Click Support Diagnostics</div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Copies a privacy-safe diagnostic summary (no sub link or keys) for @echopress_bot.</div>
-      <div class="row" style="gap:8px">
-        <button class="btn" id="diagCopyBtn" onclick="copyDiagReport()" style="flex:1;padding:8px">Copy Report</button>
-        <button class="btn btn-outline" onclick="openExternal('https://t.me/echopress_bot')" style="width:auto;padding:8px 12px">Support Bot</button>
-      </div>
     </div>
   </div>
 </div>
@@ -819,36 +799,6 @@ async function saveSettings() {
     mux: { enabled: document.getElementById('setMux').checked, concurrency: 8, xudp: 16 },
   };
   render(await pywebview.api.update_settings(patch));
-}
-function openToolsModal() {
-  document.getElementById('diagCopyBtn').textContent = 'Copy Report';
-  openModal('toolsModal');
-}
-async function runHealthCheck() {
-  const btn = document.getElementById('healthRunBtn');
-  const box = document.getElementById('healthRes');
-  btn.disabled = true;
-  btn.textContent = 'Checking...';
-  try {
-    const r = await pywebview.api.run_health_check();
-    let html = `<div><strong style="color:#fff">IP:</strong> ${r.ip || '--'} (${r.viaVpn ? 'VPN' : 'Direct'})</div>`;
-    html += `<div>${r.location || '--'} • ${r.isp || '--'}</div><div style="margin-top:6px;display:grid;gap:4px">`;
-    (r.services || []).forEach(s => {
-      const col = s.status === 'OK' ? 'var(--green)' : (s.status === 'WARN' ? '#F59E0B' : '#FF5A6E');
-      html += `<div style="display:flex;justify-content:space-between"><span>${s.name}</span><strong style="color:${col}">${s.status} (${s.detail})</strong></div>`;
-    });
-    html += '</div>';
-    box.innerHTML = html;
-  } catch (e) {
-    box.textContent = 'Check failed: ' + e;
-  }
-  btn.disabled = false;
-  btn.textContent = 'Run Health Check';
-}
-async function copyDiagReport() {
-  const txt = await pywebview.api.get_diagnostics_report();
-  try { await navigator.clipboard.writeText(txt); } catch (e) {}
-  document.getElementById('diagCopyBtn').textContent = 'Copied ✓';
 }
 async function toggleLang() {
   const next = S.language === 'fa' ? 'en' : 'fa';

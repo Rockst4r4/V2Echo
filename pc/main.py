@@ -2320,63 +2320,6 @@ class EcholicenseApi:
             return good[0]
         return pool[0]
 
-    def run_health_check(self) -> dict:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"}
-        via_vpn = self._state.get("connectionState") == "CONNECTED"
-        proxies = None
-        if via_vpn and self._state.get("mode") == "proxy" and self._active_port:
-            px = f"http://127.0.0.1:{self._active_port}"
-            proxies = {"http": px, "https": px}
-        ip, loc, isp = "--", "--", "--"
-        for url in ("https://ipwho.is/", "https://get.geojs.io/v1/ip/geo.json"):
-            try:
-                r = requests.get(url, headers=headers, proxies=proxies, timeout=7)
-                if r.ok:
-                    j = r.json()
-                    if "ipwho" in url and not j.get("success", True):
-                        continue
-                    ip = j.get("ip") or "--"
-                    loc = ", ".join(x for x in (j.get("city"), j.get("country")) if x) or "--"
-                    conn = j.get("connection") or {}
-                    isp = conn.get("isp") or conn.get("org") or j.get("organization_name") or "--"
-                    break
-            except Exception:
-                pass
-        services = []
-        for name, url in (
-            ("ChatGPT", "https://chatgpt.com/robots.txt"),
-            ("Gemini", "https://gemini.google.com/"),
-            ("Claude", "https://claude.ai/robots.txt"),
-        ):
-            t0 = time.time()
-            try:
-                r = requests.get(url, headers=headers, proxies=proxies, timeout=7)
-                ms = int((time.time() - t0) * 1000)
-                if 200 <= r.status_code < 400:
-                    services.append({"name": name, "status": "OK", "detail": f"{ms}ms"})
-                elif r.status_code in (403, 429):
-                    services.append({"name": name, "status": "WARN", "detail": f"HTTP {r.status_code} ({ms}ms)"})
-                else:
-                    services.append({"name": name, "status": "FAIL", "detail": f"HTTP {r.status_code}"})
-            except Exception as exc:
-                services.append({"name": name, "status": "FAIL", "detail": type(exc).__name__[:16]})
-        return {"ip": ip, "location": loc, "isp": isp, "viaVpn": via_vpn, "services": services}
-
-    def get_diagnostics_report(self) -> str:
-        srv = self._get_active_server() or {}
-        lp = self._live_ping or {}
-        lines = [
-            "=== Echolicense PC Diagnostic Report ===",
-            f"App: Windows v{APP_VERSION} | Mode: {self._state.get('mode')}",
-            f"State: {self._state.get('connectionState')} | Status: {self._state.get('statusMessage')}",
-            f"Server: {srv.get('name', 'None')} ({srv.get('protocol', '-')})",
-            f"DNS: {self._state.get('activeDns')} | Manual: {self._state.get('manualDns') or '-'} | MTU: {self._state.get('mtu')} (Auto={self._state.get('autoMtu')})",
-            f"Direct Ping: {lp.get('directMs')}ms (J={lp.get('directJitter')}ms) | VPN Ping: {lp.get('vpnMs')}ms (J={lp.get('vpnJitter')}ms, Loss={lp.get('packetLossPct')}%)",
-            f"Flags: IranSplit={self._state.get('iranSplit')}, AdBlock={self._state.get('adBlocker')}, KillSwitch={self._state.get('killSwitch')}, Failover={self._state.get('smartFailover')}, AiRoute={self._state.get('smartAiRouting')}",
-            f"SplitApps: {self._state.get('splitMode')} ({len(self._state.get('splitApps') or [])}) | Servers: {len(self._state.get('servers') or [])}",
-        ]
-        return "\n".join(lines)
-
     def open_url(self, url: str):
         webbrowser.open(url)
 
