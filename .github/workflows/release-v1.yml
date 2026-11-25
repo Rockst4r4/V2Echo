@@ -139,7 +139,7 @@ jobs:
         shell: pwsh
         working-directory: pc
         run: |
-          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v2.0.0/sing-box-1.10.7-windows-amd64.zip" -OutFile "singbox.zip"
+          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.10.7/sing-box-1.10.7-windows-amd64.zip" -OutFile "singbox.zip"
           Expand-Archive -Path "singbox.zip" -DestinationPath "singbox_tmp" -Force
           Copy-Item "singbox_tmp\sing-box-1.10.7-windows-amd64\sing-box.exe" -Destination "sing-box.exe"
           Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "wintun.zip"
