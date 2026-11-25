@@ -118,9 +118,19 @@ def start_singbox_tun_macos(singbox_bin: str, cfg_path: str, log_path: str, pid_
     """Start sing-box in background with root privileges for utun interface creation."""
     if not IS_MACOS:
         return False, "Not macOS"
+    for fp in (log_path, pid_path):
+        try:
+            Path(fp).parent.mkdir(parents=True, exist_ok=True)
+            Path(fp).write_text("", encoding="utf-8")
+        except Exception:
+            pass
+    work_dir = str(Path(singbox_bin).resolve().parent)
     cmd = (
-        f"nohup {shlex.quote(singbox_bin)} run -c {shlex.quote(cfg_path)} "
-        f"> {shlex.quote(log_path)} 2>&1 & echo $! > {shlex.quote(pid_path)}"
+        f"cd {shlex.quote(work_dir)} && "
+        f"(trap '' HUP; {shlex.quote(singbox_bin)} run -c {shlex.quote(cfg_path)} "
+        f"</dev/null >{shlex.quote(log_path)} 2>&1 & "
+        f"echo $! >{shlex.quote(pid_path)}; "
+        f"chmod 666 {shlex.quote(log_path)} {shlex.quote(pid_path)} 2>/dev/null || true)"
     )
     return run_admin_shell(cmd)
 
