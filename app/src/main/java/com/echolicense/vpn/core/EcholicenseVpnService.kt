@@ -137,30 +137,30 @@ class EcholicenseVpnService : VpnService() {
                 val usRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(us|usa)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
                 val irRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(ir|iran|ایران)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
                 val ruRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(ru|russia|روسیه)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
-                fun isIranSrv(name: String) = name.contains("🇮🇷") || name.contains("ایران") || irRegex.containsMatchIn(name)
-                fun isUsSrv(name: String): Boolean {
+                val isIranSrv: (String) -> Boolean = { name ->
+                    name.contains("🇮🇷") || name.contains("ایران") || irRegex.containsMatchIn(name)
+                }
+                val isUsSrv: (String) -> Boolean = { name ->
                     val l = name.lowercase()
-                    return name.contains("🇺🇸") || l.contains("united states") || l.contains("america") ||
+                    name.contains("🇺🇸") || l.contains("united states") || l.contains("america") ||
                         l.contains("آمریکا") || l.contains("امریکا") || l.contains("amazon") ||
                         l.contains("aws") || usRegex.containsMatchIn(l)
                 }
-                val hasAiGeoFile = File(filesDir, "geosite_ai.dat").let { it.exists() && it.length() > 100L }
-                val usRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(us|usa)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
-                val irRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(ir|iran|ایران)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
-                val ruRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(ru|russia|روسیه)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
-                fun isIranSrv(name: String) = name.contains("🇮🇷") || name.contains("ایران") || irRegex.containsMatchIn(name)
-                fun isUsSrv(name: String): Boolean {
-                    val l = name.lowercase()
-                    return name.contains("🇺🇸") || l.contains("united states") || l.contains("america") ||
-                        l.contains("آمریکا") || l.contains("امریکا") || l.contains("amazon") ||
-                        l.contains("aws") || usRegex.containsMatchIn(l)
+                val isRuSrv: (String) -> Boolean = { name ->
+                    name.contains("🇷🇺") || ruRegex.containsMatchIn(name)
                 }
                 val aiRouteServer = if (current.smartAiRoutingEnabled && !server.isAiPro()) {
                     val cands = current.servers.filter { it.id != server.id }
                     cands.firstOrNull { it.isAiPro() }
                         ?: cands.firstOrNull { isUsSrv(it.name) }
-                        ?: if (isIranSrv(server.name)) cands.firstOrNull { !isIranSrv(it.name) && !ruRegex.containsMatchIn(it.name) && !it.name.contains("🇷🇺") } else null
-                } else null
+                        ?: if (isIranSrv(server.name)) {
+                            cands.firstOrNull { cand -> !isIranSrv(cand.name) && !isRuSrv(cand.name) }
+                        } else {
+                            null
+                        }
+                } else {
+                    null
+                }
                 val configJson = XrayConfigBuilder.buildConfigJson(
                     profile = server,
                     primaryDns = resolvedDns,
