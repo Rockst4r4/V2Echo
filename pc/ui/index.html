@@ -486,6 +486,22 @@ body.connected .win-dot {
       <span>Smart AI Routing (AI via US)</span>
       <label class="switch"><input type="checkbox" id="setAiRoute" onchange="saveSettings()"><span class="slider"></span></label>
     </div>
+    <div id="macPrivacyGuardBox" style="display:none;margin:10px 0;padding:11px;border-radius:14px;background:rgba(168,85,247,0.10);border:1px solid rgba(168,85,247,0.34)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <strong style="font-size:12px;color:#E9D5FF">🛡️ Location &amp; Privacy Guard (macOS)</strong>
+        <span id="macGuardBadge" style="font-size:10px;padding:2px 7px;border-radius:99px;background:rgba(0,229,163,0.16);color:#00E5A3">QUIC + DNS OK</span>
+      </div>
+      <div id="macTzInfo" style="font-size:11px;color:var(--muted);line-height:1.55;margin-bottom:8px">Checking macOS timezone...</div>
+      <div class="setting-row" style="padding:4px 0">
+        <span style="font-size:11.5px">Auto-Sync Timezone in AI Pro</span>
+        <label class="switch"><input type="checkbox" id="setAutoTzSync" onchange="toggleMacAutoTz()"><span class="slider"></span></label>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button class="btn btn-outline" style="flex:1;padding:6px 8px;font-size:11px" onclick="syncMacTzNow()">Sync Timezone</button>
+        <button class="btn btn-outline" style="flex:1;padding:6px 8px;font-size:11px" onclick="restoreMacTzNow()">Restore TZ</button>
+      </div>
+      <button class="btn btn-outline" style="width:100%;margin-top:6px;padding:6px 8px;font-size:11px;border-color:rgba(34,228,255,0.35);color:#22E4FF" onclick="openMacLocationPrefs()">Open macOS Location Services</button>
+    </div>
     <div class="setting-row">
       <span>AdBlocker (Ads & YouTube)</span>
       <label class="switch"><input type="checkbox" id="setAdblock" onchange="saveSettings()"><span class="slider"></span></label>
@@ -861,6 +877,80 @@ window.addEventListener('pywebviewready', async () => {
 
 function minimizeWin() { if (window.pywebview) pywebview.api.minimize_window(); }
 function closeWin() { if (window.pywebview) pywebview.api.close_window(); }
+
+
+async function refreshMacPrivacyGuard() {
+  try {
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.get_privacy_guard) return;
+    const g = await window.pywebview.api.get_privacy_guard();
+    const box = document.getElementById('macPrivacyGuardBox');
+    if (!box) return;
+    if (!g || !g.supported) {
+      box.style.display = 'none';
+      return;
+    }
+    box.style.display = 'block';
+    const startupRow = document.getElementById('setStartup');
+    if (startupRow && startupRow.closest('.setting-row')) {
+      const sp = startupRow.closest('.setting-row').querySelector('span');
+      if (sp && sp.textContent.includes('Windows')) sp.textContent = 'Start with macOS (Login Item)';
+    }
+    const cb = document.getElementById('setAutoTzSync');
+    if (cb) cb.checked = !!g.autoTzSync;
+    const info = document.getElementById('macTzInfo');
+    const badge = document.getElementById('macGuardBadge');
+    if (info) {
+      info.innerHTML = 'System TZ: <b style="color:#fff">' + (g.systemTimezone || '-') + '</b> • Server Target: <b style="color:#22E4FF">' + (g.recommendedTimezone || '-') + '</b>' +
+        (g.timezoneMismatch ? '<br><span style="color:#F59E0B">⚠️ Timezone mismatch detected with active VPN server</span>' : '<br><span style="color:#00E5A3">✓ Timezone aligned • QUIC &amp; DNS Leak Guard active</span>');
+    }
+    if (badge) {
+      badge.textContent = g.timezoneMismatch ? 'TZ Mismatch' : 'Protected';
+      badge.style.color = g.timezoneMismatch ? '#F59E0B' : '#00E5A3';
+      badge.style.background = g.timezoneMismatch ? 'rgba(245,158,11,0.16)' : 'rgba(0,229,163,0.16)';
+    }
+  } catch (e) {}
+}
+
+async function toggleMacAutoTz() {
+  try {
+    const cb = document.getElementById('setAutoTzSync');
+    if (window.pywebview && window.pywebview.api) {
+      await window.pywebview.api.update_settings({ autoTzSync: !!(cb && cb.checked) });
+      refreshMacPrivacyGuard();
+    }
+  } catch (e) {}
+}
+
+async function syncMacTzNow() {
+  try {
+    if (window.pywebview && window.pywebview.api) {
+      await window.pywebview.api.sync_macos_timezone();
+      refreshMacPrivacyGuard();
+    }
+  } catch (e) {}
+}
+
+async function restoreMacTzNow() {
+  try {
+    if (window.pywebview && window.pywebview.api) {
+      await window.pywebview.api.restore_macos_timezone();
+      refreshMacPrivacyGuard();
+    }
+  } catch (e) {}
+}
+
+async function openMacLocationPrefs() {
+  try {
+    if (window.pywebview && window.pywebview.api) {
+      await window.pywebview.api.open_macos_location_settings();
+    }
+  } catch (e) {}
+}
+
+window.addEventListener('pywebviewready', function () {
+  refreshMacPrivacyGuard();
+  setInterval(refreshMacPrivacyGuard, 5000);
+});
 
 </script>
 </body>

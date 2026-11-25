@@ -1,4 +1,4 @@
-name: Echolicense v2.0.0 Official Release (Android + PC)
+name: Echolicense v2.0.0 Official Release (Android + Windows + macOS)
 
 on:
   push:
@@ -157,10 +157,7 @@ jobs:
           } catch { Write-Host "WireGuard extract skipped: $_" }
           try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs" -OutFile "geoip-ir.srs" } catch {}
           try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-ir.srs" -OutFile "geosite-ir.srs" } catch {}
-          foreach ($gs in @("category-ai-!cn", "google-deepmind", "openai", "anthropic", "perplexity", "xai")) {
-            try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-$gs.srs" -OutFile "geosite-$gs.srs" } catch {}
-          }
-          foreach ($gs in @("category-ai-!cn", "google-gemini", "google-deepmind", "openai", "anthropic", "perplexity", "xai", "binance", "okx", "bybit")) {
+          foreach ($gs in @("category-ai-!cn", "google-deepmind", "openai", "anthropic", "perplexity", "xai", "binance", "okx", "bybit")) {
             try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-$gs.srs" -OutFile "geosite-$gs.srs" } catch {}
           }
 
@@ -201,8 +198,89 @@ jobs:
             Echolicense-Windows-Setup-v2.0.0.exe
             Echolicense-Windows-v2.0.0.zip
 
+  build-macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12 (macOS Apple Silicon)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python Dependencies
+        working-directory: pc
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install -r requirements.txt
+
+      - name: Download sing-box (darwin-arm64) & Geosite Rule-Sets
+        working-directory: pc
+        run: |
+          curl -fL -o singbox.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v1.10.7/sing-box-1.10.7-darwin-arm64.tar.gz"
+          tar -xzf singbox.tar.gz
+          cp sing-box-1.10.7-darwin-arm64/sing-box sing-box
+          chmod +x sing-box
+          curl -fL -o geoip-ir.srs "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs" || true
+          curl -fL -o geosite-ir.srs "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-ir.srs" || true
+          for gs in "category-ai-!cn" "google-deepmind" "openai" "anthropic" "perplexity" "xai" "binance" "okx" "bybit"; do
+            curl -fL -o "geosite-$gs.srs" "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-$gs.srs" || true
+          done
+
+      - name: Build macOS Apple Silicon App & DMG
+        working-directory: pc
+        run: |
+          python3 build_macos_dmg.py AppleSilicon 2.0.0
+
+      - name: Upload macOS Apple Silicon Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Echolicense-macOS-AppleSilicon-v2.0.0
+          path: Echolicense-macOS-AppleSilicon-v2.0.0.dmg
+
+  build-macos-intel:
+    runs-on: macos-15-intel
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12 (macOS Intel)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python Dependencies
+        working-directory: pc
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install -r requirements.txt
+
+      - name: Download sing-box (darwin-amd64) & Geosite Rule-Sets
+        working-directory: pc
+        run: |
+          curl -fL -o singbox.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v1.10.7/sing-box-1.10.7-darwin-amd64.tar.gz"
+          tar -xzf singbox.tar.gz
+          cp sing-box-1.10.7-darwin-amd64/sing-box sing-box
+          chmod +x sing-box
+          curl -fL -o geoip-ir.srs "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs" || true
+          curl -fL -o geosite-ir.srs "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-ir.srs" || true
+          for gs in "category-ai-!cn" "google-deepmind" "openai" "anthropic" "perplexity" "xai" "binance" "okx" "bybit"; do
+            curl -fL -o "geosite-$gs.srs" "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-$gs.srs" || true
+          done
+
+      - name: Build macOS Intel App & DMG
+        working-directory: pc
+        run: |
+          python3 build_macos_dmg.py Intel 2.0.0
+
+      - name: Upload macOS Intel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Echolicense-macOS-Intel-v2.0.0
+          path: Echolicense-macOS-Intel-v2.0.0.dmg
+
   publish-release:
-    needs: [build-android, build-windows-pc]
+    needs: [build-android, build-windows-pc, build-macos-arm64, build-macos-intel]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -213,12 +291,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v2.0.0
-          name: "Echolicense VPN v2.0.0 (Android + Windows PC)"
+          name: "Echolicense VPN v2.0.0 (Android + Windows + macOS)"
           body: |
             ## Echolicense VPN v2.0.0 Official Release
-            - **Windows PC Installer**: Official Setup (`Echolicense-Windows-Setup-v2.0.0.exe`) with Start Menu & Desktop shortcut + clean uninstall
-            - **Windows PC Portable**: Portable archive (`Echolicense-Windows-v2.0.0.zip`)
+            - **macOS (Apple Silicon M1-M5)**: `Echolicense-macOS-AppleSilicon-v2.0.0.dmg` (Smart AI Routing, Smart Failover, Location & Privacy Guard, `echolicense://`)
+            - **macOS (Intel)**: `Echolicense-macOS-Intel-v2.0.0.dmg`
+            - **Windows PC Installer**: Official Setup (`Echolicense-Windows-Setup-v2.0.0.exe`) & Portable (`Echolicense-Windows-v2.0.0.zip`)
             - **Android**: Signed Release APK (`Echolicense-Android-v2.0.0.apk`) & Google Play AAB (`Echolicense-Android-v2.0.0.aab`)
           files: |
             release-files/Echolicense-Android-v2.0.0/*
             release-files/Echolicense-Windows-v2.0.0/*
+            release-files/Echolicense-macOS-*/*

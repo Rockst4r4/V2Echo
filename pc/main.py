@@ -35,6 +35,12 @@ except ImportError:
 
 from singbox_config import build_singbox_config
 
+IS_MACOS = sys.platform == "darwin"
+try:
+    import macos_support
+except Exception:
+    macos_support = None
+
 try:
     import winreg
 except ImportError:
@@ -87,14 +93,21 @@ def get_resource_dir() -> Path:
 
 
 def get_data_dir() -> Path:
-    base = Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
+    if IS_MACOS:
+        base = Path.home() / "Library" / "Application Support" / APP_NAME
+    else:
+        base = Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
     base.mkdir(parents=True, exist_ok=True)
     return base
 
 
 def get_hwid() -> str:
     raw = f"{platform.node()}-{uuid.getnode()}-{platform.machine()}"
-    if winreg:
+    if IS_MACOS and macos_support:
+        mac_uuid = macos_support.get_macos_hardware_uuid()
+        if mac_uuid:
+            raw = f"echo_mac_{mac_uuid}"
+    elif winreg:
         try:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
                 guid, _ = winreg.QueryValueEx(key, "MachineGuid")
@@ -106,13 +119,21 @@ def get_hwid() -> str:
 
 
 def get_device_headers() -> dict:
+    if IS_MACOS:
+        ver_os = platform.mac_ver()[0] or platform.release()
+        dev_os = "macOS"
+        dev_model = f"Mac {platform.machine()}"
+    else:
+        ver_os = platform.release()
+        dev_os = "Windows"
+        dev_model = f"PC {platform.machine()}"
     return {
         "User-Agent": "v2rayNG/1.9.15",
         "Accept": "*/*",
         "x-hwid": get_hwid(),
-        "x-device-os": "Windows",
-        "x-ver-os": platform.release(),
-        "x-device-model": f"PC {platform.machine()}",
+        "x-device-os": dev_os,
+        "x-ver-os": ver_os,
+        "x-device-model": dev_model,
     }
 
 
@@ -362,7 +383,8 @@ class EcholicenseApi:
     def _default_state(self) -> dict:
         return {
             "language": "en",
-            "mode": "tun",
+            "mode": "proxy" if IS_MACOS else "tun",
+            "autoTzSync": False,
             "connectionState": "DISCONNECTED",
             "statusMessage": "Ready to connect",
             "subscriptions": [],
@@ -418,7 +440,7 @@ class EcholicenseApi:
             pass
 
     def _run_hidden(self, args: list[str]) -> int:
-        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         try:
             r = subprocess.run(args, capture_output=True, text=True, creationflags=flags, timeout=5)
             return r.returncode
@@ -426,6 +448,12 @@ class EcholicenseApi:
             return 1
 
     def _set_windows_proxy(self, enabled: bool):
+        if IS_MACOS and macos_support:
+            if enabled:
+                macos_support.set_system_proxy("127.0.0.1", self._active_port)
+            else:
+                macos_support.clear_system_proxy()
+            return
         if not winreg:
             return
         try:
@@ -438,6 +466,10 @@ class EcholicenseApi:
             pass
 
     def _apply_startup_registry(self, enabled: bool):
+        if IS_MACOS and macos_support:
+            exe = sys.executable if getattr(sys, "frozen", False) else None
+            macos_support.set_autostart(bool(enabled), exe)
+            return
         if not winreg:
             return
         try:
@@ -454,12 +486,22 @@ class EcholicenseApi:
             pass
 
     def _clear_killswitch_rules(self):
+        if IS_MACOS and macos_support:
+            macos_support.disable_killswitch()
+            return
         if os.name != "nt":
             return
         for suffix in ("AllowLoopback", "AllowServer", "AllowLan", "AllowCore", "BlockLeak"):
             self._run_hidden(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={KILLSWITCH_PREFIX}_{suffix}"])
 
     def _apply_killswitch_rules(self, server_host: str):
+        if IS_MACOS and macos_support:
+            try:
+                srv_ip = socket.gethostbyname(server_host)
+            except Exception:
+                srv_ip = ""
+            macos_support.enable_killswitch(srv_ip)
+            return
         if os.name != "nt":
             return
         self._clear_killswitch_rules()
@@ -589,7 +631,7 @@ class EcholicenseApi:
     def _detect_auto_mtu(self, proto: str) -> int:
         overhead = 80 if proto.upper() == "WIREGUARD" else 60
         candidates = (1452, 1392, 1322)
-        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
         def _probe(payload: int) -> int:
             try:
@@ -646,7 +688,7 @@ class EcholicenseApi:
         if os.name != "nt":
             return None
         try:
-            flags = subprocess.CREATE_NO_WINDOW
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             out = subprocess.check_output(
                 ["route", "print", "0.0.0.0"],
                 text=True,
@@ -670,6 +712,8 @@ class EcholicenseApi:
             return None
 
     def _add_direct_probe_route(self):
+        if os.name != "nt":
+            return
         self._direct_route_active = False
         if os.name != "nt":
             return
@@ -687,6 +731,8 @@ class EcholicenseApi:
             self._direct_route_active = False
 
     def _remove_direct_probe_route(self):
+        if os.name != "nt":
+            return
         self._direct_route_active = False
         if os.name != "nt":
             return
@@ -778,7 +824,7 @@ class EcholicenseApi:
         if os.name != "nt":
             return -1
         try:
-            flags = subprocess.CREATE_NO_WINDOW
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             cmd = ["ping", "-n", "1", "-w", str(timeout_ms)]
             if bind_ip:
                 cmd.extend(["-S", bind_ip])
@@ -1378,6 +1424,9 @@ class EcholicenseApi:
         self._fetch_announcement()
 
     def _show_windows_toast(self, title: str, message: str):
+        if IS_MACOS and macos_support:
+            macos_support.send_notification(title, message)
+            return
         if os.name != "nt":
             return
         if self._tray is not None:
@@ -1401,7 +1450,7 @@ class EcholicenseApi:
             env = dict(os.environ)
             env["ECHO_NOTIF_TITLE"] = (title or "Echolicense VPN")[:63]
             env["ECHO_NOTIF_MSG"] = (message or "New notification")[:250]
-            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
             try:
                 subprocess.run(
                     ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
@@ -1610,6 +1659,8 @@ class EcholicenseApi:
             out["livePing"] = dict(self._live_ping)
         with self._update_lock:
             out["appUpdate"] = dict(self._update_state)
+        out["platform"] = "macos" if IS_MACOS else "windows"
+        out["privacyGuard"] = self.get_privacy_guard()
         self._sync_tray()
         return out
 
@@ -1636,9 +1687,10 @@ class EcholicenseApi:
             self._state["statusMessage"] = "Add a subscription or config first"
             return self.get_state()
 
-        singbox_bin = get_app_dir() / "sing-box.exe"
+        singbox_name = "sing-box" if IS_MACOS else "sing-box.exe"
+        singbox_bin = get_app_dir() / singbox_name
         if not singbox_bin.exists():
-            self._state["statusMessage"] = "sing-box.exe not found next to app"
+            self._state["statusMessage"] = f"{singbox_name} not found next to app"
             return self.get_state()
 
         self.disconnect(keep_killswitch=True)
@@ -1656,14 +1708,14 @@ class EcholicenseApi:
         mode = self._state.get("mode", "tun")
         stacks_to_try = ["system", "mixed", "gvisor"] if mode == "tun" else ["system"]
         cfg_path = self._data_dir / "active_config.json"
-        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
         if self._state.get("killSwitch"):
             self._apply_killswitch_rules(srv["host"])
 
         # اجرای WireGuard روی درایور کرنل بومی برای پینگ واقعی ICMP در CMD (بدون <1ms فیک)
         ai_route_srv = self._find_ai_routing_server(srv)
-        if mode == "tun" and srv.get("protocol", "").upper() == "WIREGUARD" and not self._state.get("splitApps") and not ai_route_srv:
+        if (not IS_MACOS) and mode == "tun" and srv.get("protocol", "").upper() == "WIREGUARD" and not self._state.get("splitApps") and not ai_route_srv:
             if self._start_native_wg(srv, dns_addr, mtu):
                 self._add_direct_probe_route()
                 self._set_windows_proxy(False)
@@ -1718,21 +1770,48 @@ class EcholicenseApi:
                     pass
                 self._log_fh = None
 
-            env = dict(os.environ)
-            env["NO_COLOR"] = "1"
-            self._log_fh = open(self._log_file, "w", encoding="utf-8", errors="replace")
-            self._proc = subprocess.Popen(
-                [str(singbox_bin), "run", "-c", str(cfg_path)],
-                cwd=str(get_app_dir()),
-                stdout=self._log_fh,
-                stderr=subprocess.STDOUT,
-                creationflags=flags,
-                env=env,
-            )
-            time.sleep(1.1)
-            if self._proc.poll() is None:
-                started = True
-                break
+            if IS_MACOS and mode == "tun" and macos_support:
+                pid_path = self._data_dir / "singbox_tun.pid"
+                ok_mac, mac_err = macos_support.start_singbox_tun_macos(
+                    str(singbox_bin), str(cfg_path), str(self._log_file), str(pid_path)
+                )
+                if not ok_mac:
+                    last_err = mac_err or "macOS admin authorization cancelled (use System Proxy for passwordless mode)"
+                    break
+                time.sleep(1.3)
+                alive_mac = False
+                if pid_path.exists():
+                    try:
+                        mpid = int(pid_path.read_text(encoding="utf-8").strip())
+                        try:
+                            os.kill(mpid, 0)
+                            alive_mac = True
+                        except PermissionError:
+                            alive_mac = True
+                        except ProcessLookupError:
+                            alive_mac = False
+                    except Exception:
+                        alive_mac = False
+                if alive_mac:
+                    self._mac_tun_active = True
+                    started = True
+                    break
+            else:
+                env = dict(os.environ)
+                env["NO_COLOR"] = "1"
+                self._log_fh = open(self._log_file, "w", encoding="utf-8", errors="replace")
+                self._proc = subprocess.Popen(
+                    [str(singbox_bin), "run", "-c", str(cfg_path)],
+                    cwd=str(get_app_dir()),
+                    stdout=self._log_fh,
+                    stderr=subprocess.STDOUT,
+                    creationflags=flags,
+                    env=env,
+                )
+                time.sleep(1.1)
+                if self._proc.poll() is None:
+                    started = True
+                    break
 
             try:
                 self._log_fh.flush()
@@ -1760,6 +1839,12 @@ class EcholicenseApi:
         else:
             self._set_windows_proxy(False)
 
+        if IS_MACOS and macos_support and self._state.get("autoTzSync") and (self._is_ai_server(srv) or self._state.get("smartAiRouting")):
+            threading.Thread(
+                target=macos_support.sync_timezone_for_server,
+                args=(srv.get("name", ""), bool(self._state.get("smartAiRouting"))),
+                daemon=True,
+            ).start()
         self._connected_at = time.time()
         self._state["connectionState"] = "CONNECTED"
         mode_lbl = "TUN (Real Ping)" if mode == "tun" else "System Proxy"
@@ -1771,6 +1856,11 @@ class EcholicenseApi:
     def disconnect(self, keep_killswitch: bool = False) -> dict:
         self._remove_direct_probe_route()
         self._stop_native_wg()
+        if IS_MACOS and macos_support and getattr(self, "_mac_tun_active", False):
+            macos_support.stop_singbox_tun_macos(str(self._data_dir / "singbox_tun.pid"))
+            self._mac_tun_active = False
+        if IS_MACOS and macos_support and (not keep_killswitch) and self._state.get("autoTzSync"):
+            threading.Thread(target=macos_support.restore_original_timezone, daemon=True).start()
         if self._proc:
             try:
                 self._proc.terminate()
@@ -1997,6 +2087,8 @@ class EcholicenseApi:
         return self.get_state()
 
     def get_running_apps(self) -> list[str]:
+        if IS_MACOS and macos_support:
+            return macos_support.list_installed_and_running_apps()
         ignore = {"svchost.exe", "system", "registry", "csrss.exe", "wininit.exe", "services.exe", "lsass.exe", "sing-box.exe", "echolicensevpn.exe"}
         found = set()
         for p in psutil.process_iter(["name"]):
@@ -2113,7 +2205,7 @@ class EcholicenseApi:
         os._exit(0)
 
     def start_tray(self):
-        if pystray is None or self._tray is not None:
+        if IS_MACOS or pystray is None or self._tray is not None:
             return
         try:
             img = self._build_tray_image(self._state.get("connectionState"), bool(self._state.get("gamingOnly")))
@@ -2306,6 +2398,42 @@ class EcholicenseApi:
             return good[0]
         return pool[0]
 
+    def get_privacy_guard(self) -> dict:
+        if not (IS_MACOS and macos_support):
+            return {"supported": False}
+        srv = self._get_active_server() or {}
+        is_conn = self._state.get("connectionState") == "CONNECTED"
+        st = macos_support.get_privacy_guard_status(
+            srv.get("name", ""),
+            is_conn,
+            bool(self._state.get("smartAiRouting", False)),
+        )
+        st["autoTzSync"] = bool(self._state.get("autoTzSync", False))
+        return st
+
+    def sync_macos_timezone(self) -> dict:
+        if not (IS_MACOS and macos_support):
+            return {"ok": False, "error": "macOS only"}
+        srv = self._get_active_server() or {}
+        res = macos_support.sync_timezone_for_server(
+            srv.get("name", ""),
+            bool(self._state.get("smartAiRouting", False)),
+        )
+        res["guard"] = self.get_privacy_guard()
+        return res
+
+    def restore_macos_timezone(self) -> dict:
+        if not (IS_MACOS and macos_support):
+            return {"ok": False, "error": "macOS only"}
+        res = macos_support.restore_original_timezone()
+        res["guard"] = self.get_privacy_guard()
+        return res
+
+    def open_macos_location_settings(self) -> dict:
+        if not (IS_MACOS and macos_support):
+            return {"ok": False}
+        return {"ok": macos_support.open_macos_location_settings()}
+
     def open_url(self, url: str):
         webbrowser.open(url)
 
@@ -2326,6 +2454,8 @@ def main():
             pass
 
     api = EcholicenseApi()
+    if IS_MACOS and macos_support:
+        macos_support.register_url_handler(lambda uri: threading.Thread(target=api.handle_deeplink, args=(uri,), daemon=True).start())
     if deeplink_arg:
         threading.Timer(1.2, api.handle_deeplink, args=(deeplink_arg,)).start()
     index_html = str(get_resource_dir() / "ui" / "index.html")

@@ -1,3 +1,4 @@
+import sys
 import base64
 import json
 import os
@@ -342,24 +343,24 @@ def build_singbox_config(
     ]
 
     if mode == "tun":
-        inbounds.append(
-            {
-                "type": "tun",
-                "tag": "tun-in",
-                "interface_name": "EcholicenseTUN",
-                "address": ["172.19.0.1/30"],
-                "mtu": max(1200, min(1500, int(mtu))),
-                "auto_route": True,
-                "strict_route": False,
-                "stack": tun_stack,
-                "sniff": True,
-            }
-        )
+        tun_inb = {
+            "type": "tun",
+            "tag": "tun-in",
+            "address": ["172.19.0.1/30"],
+            "mtu": max(1200, min(1500, int(mtu))),
+            "auto_route": True,
+            "strict_route": False,
+            "stack": tun_stack,
+            "sniff": True,
+        }
+        if sys.platform != "darwin":
+            tun_inb["interface_name"] = "EcholicenseTUN"
+        inbounds.append(tun_inb)
 
     route_rules = [
         {"protocol": "dns", "outbound": "dns-out"},
         {"ip_is_private": True, "outbound": "direct"},
-        {"process_name": ["EcholicenseVPN.exe", "python.exe", "pythonw.exe"], "outbound": "direct"},
+        {"process_name": ["EcholicenseVPN.exe", "EcholicenseVPN", "python.exe", "pythonw.exe", "python3"], "outbound": "direct"},
     ]
     if ai_out:
         if ai_rs_tags:
