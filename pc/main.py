@@ -1268,20 +1268,26 @@ class EcholicenseApi:
 
     def _fetch_update_metadata(self) -> tuple[dict | None, str]:
         errs = []
+        is_arm = platform.machine().lower() in ("arm64", "aarch64")
         try:
             url = f"https://app.echolicense.ai/downloads/latest.json?t={int(time.time() // 60)}"
             data = self._http_fetch_json(url, timeout=12)
             tag = data.get("tag") or ""
-            win = data.get("windows") or {}
-            rel_url = win.get("url") or ""
+            if IS_MACOS:
+                item = (data.get("macos_arm") if is_arm else data.get("macos_intel")) or data.get("macos_arm") or data.get("macos_intel") or {}
+                default_name = f"Echolicense-macOS-{'AppleSilicon' if is_arm else 'Intel'}-{tag}.dmg"
+            else:
+                item = data.get("windows") or {}
+                default_name = f"Echolicense-Windows-Setup-{tag}.exe"
+            rel_url = item.get("url") or ""
             if tag and rel_url:
                 full_url = rel_url if rel_url.startswith("http") else f"https://app.echolicense.ai{rel_url}"
                 return {
                     "tag": tag,
                     "url": full_url,
-                    "name": win.get("name") or f"Echolicense-Windows-Setup-{tag}.exe",
-                    "sizeMb": float(win.get("size_mb") or 0.0),
-                    "updatedAt": win.get("updated_at") or "",
+                    "name": item.get("name") or default_name,
+                    "sizeMb": float(item.get("size_mb") or 0.0),
+                    "updatedAt": item.get("updated_at") or "",
                 }, ""
             errs.append("empty latest.json")
         except Exception as e:
@@ -1292,7 +1298,12 @@ class EcholicenseApi:
             tag = rel.get("tag_name") or ""
             for a in rel.get("assets") or []:
                 nm = a.get("name") or ""
-                if re.search(r"windows.*setup.*\.exe$", nm, re.I) or re.search(r"windows.*\.exe$", nm, re.I):
+                if IS_MACOS:
+                    pat = r"macos.*(applesilicon|arm64).*\.dmg$" if is_arm else r"macos.*(intel|amd64|x64).*\.dmg$"
+                    matched = bool(re.search(pat, nm, re.I))
+                else:
+                    matched = bool(re.search(r"windows.*setup.*\.exe$", nm, re.I) or re.search(r"windows.*\.exe$", nm, re.I))
+                if matched:
                     return {
                         "tag": tag,
                         "url": a.get("browser_download_url") or "",
@@ -1300,7 +1311,7 @@ class EcholicenseApi:
                         "sizeMb": round(int(a.get("size") or 0) / 1048576.0, 1),
                         "updatedAt": a.get("updated_at") or "",
                     }, ""
-            errs.append("no exe asset")
+            errs.append("no dmg asset" if IS_MACOS else "no exe asset")
         except Exception as e:
             errs.append(f"gh: {type(e).__name__}")
 
@@ -1380,7 +1391,7 @@ class EcholicenseApi:
         except Exception:
             try:
                 if os.name == "nt":
-                    os.startfile(url)
+                    (subprocess.Popen(["open", str(url)]) if IS_MACOS else os.startfile(url))
             except Exception as exc:
                 with self._update_lock:
                     self._update_state["statusFa"] = f"خطا در باز کردن مرورگر: {exc}"
