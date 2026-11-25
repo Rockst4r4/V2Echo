@@ -243,6 +243,31 @@ def build_outbound(profile: dict, mtu: int, mux_cfg: dict) -> dict:
     return out
 
 
+AI_SRS_FILES = [
+    ("geosite-ai-cat", "geosite-category-ai-!cn.srs"),
+    ("geosite-gemini", "geosite-google-gemini.srs"),
+    ("geosite-deepmind", "geosite-google-deepmind.srs"),
+    ("geosite-openai", "geosite-openai.srs"),
+    ("geosite-anthropic", "geosite-anthropic.srs"),
+    ("geosite-perplexity", "geosite-perplexity.srs"),
+    ("geosite-xai", "geosite-xai.srs"),
+    ("geosite-binance", "geosite-binance.srs"),
+    ("geosite-okx", "geosite-okx.srs"),
+    ("geosite-bybit", "geosite-bybit.srs"),
+]
+
+AI_EXTRA_SUFFIXES = [
+    "gemini.google.com", "bard.google.com", "aistudio.google.com", "makersuite.google.com",
+    "generativelanguage.googleapis.com", "ai.google.dev", "deepmind.google", "deepmind.com",
+    "alkalimakersuite-pa.clients6.google.com", "robinfrontend-pa.clients6.google.com",
+    "proactivebackend-pa.clients6.google.com", "waa-pa.clients6.google.com",
+    "geller-pa.googleapis.com", "clients6.google.com", "ogs.google.com",
+    "openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com",
+    "anthropic.com", "claude.ai", "perplexity.ai", "x.ai", "grok.com",
+    "copilot.microsoft.com", "cursor.com", "cursor.sh",
+    "binance.com", "bybit.com", "okx.com",
+]
+
 def build_singbox_config(
     profile: dict,
     mode: str,
@@ -256,6 +281,7 @@ def build_singbox_config(
     socks_port: int = 10808,
     tun_stack: str = "system",
     app_dir: str | None = None,
+    ai_profile: dict | None = None,
 ) -> dict:
     proxy_out = build_outbound(profile, mtu, mux_cfg)
     dns_remote = (dns_server or "").strip()
@@ -279,8 +305,25 @@ def build_singbox_config(
     if iran_split and geosite_ir.exists() and geosite_ir.stat().st_size > 100:
         rule_sets.append({"tag": "geosite-ir", "type": "local", "format": "binary", "path": str(geosite_ir)})
     rs_tags = [r["tag"] for r in rule_sets]
+    ai_out = None
+    ai_rs_tags = []
+    if ai_profile and ai_profile.get("id") != profile.get("id"):
+        try:
+            ai_out = build_outbound(ai_profile, mtu, {})
+            ai_out["tag"] = "ai-proxy"
+            for tag_name, fname in AI_SRS_FILES:
+                fpath = base_dir / fname
+                if fpath.exists() and fpath.stat().st_size > 100:
+                    rule_sets.append({"tag": tag_name, "type": "local", "format": "binary", "path": str(fpath)})
+                    ai_rs_tags.append(tag_name)
+        except Exception:
+            ai_out = None
 
     dns_rules = [{"outbound": "any", "server": "local"}]
+    if ai_out:
+        if ai_rs_tags:
+            dns_rules.append({"rule_set": ai_rs_tags, "server": "ai-dns"})
+        dns_rules.append({"domain_suffix": AI_EXTRA_SUFFIXES, "server": "ai-dns"})
     if iran_split:
         dns_rules.append({"domain_suffix": IRAN_EXTRA_SUFFIXES, "server": "local"})
         if "geosite-ir" in rs_tags:
@@ -318,6 +361,12 @@ def build_singbox_config(
         {"ip_is_private": True, "outbound": "direct"},
         {"process_name": ["EcholicenseVPN.exe", "python.exe", "pythonw.exe"], "outbound": "direct"},
     ]
+    if ai_out:
+        if ai_rs_tags:
+            route_rules.append({"network": "udp", "port": 443, "rule_set": ai_rs_tags, "outbound": "block"})
+            route_rules.append({"rule_set": ai_rs_tags, "outbound": "ai-proxy"})
+        route_rules.append({"network": "udp", "port": 443, "domain_suffix": AI_EXTRA_SUFFIXES, "outbound": "block"})
+        route_rules.append({"domain_suffix": AI_EXTRA_SUFFIXES, "outbound": "ai-proxy"})
 
     if adblock:
         route_rules.append({"domain_suffix": AD_DOMAIN_SUFFIXES, "outbound": "block"})
@@ -345,7 +394,7 @@ def build_singbox_config(
     if rule_sets:
         route_obj["rule_set"] = rule_sets
 
-    return {
+    cfg = {
         "log": {"level": "warn", "timestamp": True},
         "dns": {
             "servers": [
@@ -365,3 +414,9 @@ def build_singbox_config(
         ],
         "route": route_obj,
     }
+    if ai_out:
+        cfg.setdefault("dns", {}).setdefault("servers", []).append(
+            {"tag": "ai-dns", "address": "1.1.1.1", "detour": "ai-proxy"}
+        )
+        cfg.setdefault("outbounds", []).append(ai_out)
+    return cfg

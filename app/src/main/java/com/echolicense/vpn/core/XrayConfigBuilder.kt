@@ -14,6 +14,54 @@ object XrayConfigBuilder {
 
     private val IPV4_REGEX = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
 
+    private fun buildAiDomainsArray(hasAiGeoFile: Boolean): JSONArray {
+        val arr = JSONArray()
+        if (hasAiGeoFile) {
+            listOf(
+                "ext:geosite_ai.dat:category-ai-!cn",
+                "ext:geosite_ai.dat:google-gemini",
+                "ext:geosite_ai.dat:google-deepmind",
+                "ext:geosite_ai.dat:openai",
+                "ext:geosite_ai.dat:anthropic",
+                "ext:geosite_ai.dat:binance",
+                "ext:geosite_ai.dat:okx"
+            ).forEach { arr.put(it) }
+        }
+        listOf(
+            "domain:gemini.google.com",
+            "domain:bard.google.com",
+            "domain:aistudio.google.com",
+            "domain:makersuite.google.com",
+            "domain:generativelanguage.googleapis.com",
+            "domain:ai.google.dev",
+            "domain:deepmind.google",
+            "domain:deepmind.com",
+            "domain:alkalimakersuite-pa.clients6.google.com",
+            "domain:robinfrontend-pa.clients6.google.com",
+            "domain:proactivebackend-pa.clients6.google.com",
+            "domain:waa-pa.clients6.google.com",
+            "domain:geller-pa.googleapis.com",
+            "domain:clients6.google.com",
+            "domain:ogs.google.com",
+            "domain:openai.com",
+            "domain:chatgpt.com",
+            "domain:oaistatic.com",
+            "domain:oaiusercontent.com",
+            "domain:anthropic.com",
+            "domain:claude.ai",
+            "domain:perplexity.ai",
+            "domain:x.ai",
+            "domain:grok.com",
+            "domain:copilot.microsoft.com",
+            "domain:cursor.com",
+            "domain:cursor.sh",
+            "domain:binance.com",
+            "domain:bybit.com",
+            "domain:okx.com"
+        ).forEach { arr.put(it) }
+        return arr
+    }
+
     fun buildConfigJson(
         profile: ServerProfile,
         primaryDns: DnsProvider,
@@ -23,7 +71,8 @@ object XrayConfigBuilder {
         muxConfig: MuxConfig,
         hasGeoFiles: Boolean,
         probePort: Int = 0,
-        aiFallbackProfile: ServerProfile? = null
+        aiFallbackProfile: ServerProfile? = null,
+        hasAiGeoFile: Boolean = false
     ): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "none"))
@@ -85,6 +134,14 @@ object XrayConfigBuilder {
         addedDns.add("1.1.1.1")
         addedDns.add("8.8.8.8")
         addedDns.forEach { dnsServers.put(it) }
+
+        if (aiFallbackProfile != null && aiFallbackProfile.id != profile.id) {
+            dnsServers.put(
+                JSONObject()
+                    .put("address", "8.8.4.4")
+                    .put("domains", buildAiDomainsArray(hasAiGeoFile))
+            )
+        }
 
         root.put(
             "dns",
@@ -252,26 +309,24 @@ object XrayConfigBuilder {
         }
 
         if (useAiRoute) {
-            val aiDomains = JSONArray()
-                .put("domain:openai.com")
-                .put("domain:chatgpt.com")
-                .put("domain:oaistatic.com")
-                .put("domain:oaiusercontent.com")
-                .put("domain:anthropic.com")
-                .put("domain:claude.ai")
-                .put("domain:gemini.google.com")
-                .put("domain:generativelanguage.googleapis.com")
-                .put("domain:aistudio.google.com")
-                .put("domain:perplexity.ai")
-                .put("domain:x.ai")
-                .put("domain:grok.com")
-                .put("domain:binance.com")
-                .put("domain:bybit.com")
-                .put("domain:okx.com")
             rules.put(
                 JSONObject()
                     .put("type", "field")
-                    .put("domain", aiDomains)
+                    .put("ip", JSONArray().put("8.8.4.4/32"))
+                    .put("outboundTag", "ai-proxy")
+            )
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("network", "udp")
+                    .put("port", 443)
+                    .put("domain", buildAiDomainsArray(hasAiGeoFile))
+                    .put("outboundTag", "block")
+            )
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("domain", buildAiDomainsArray(hasAiGeoFile))
                     .put("outboundTag", "ai-proxy")
             )
         }

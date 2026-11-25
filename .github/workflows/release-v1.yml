@@ -94,6 +94,7 @@ jobs:
           curl -fL -o app/libs/libv2ray.aar "$AAR_URL"
           curl -fL -o app/src/main/assets/geoip.dat "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geoip.dat"
           curl -fL -o app/src/main/assets/geosite.dat "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/geosite.dat"
+          curl -fL -o app/src/main/assets/geosite_ai.dat "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -156,6 +157,12 @@ jobs:
           } catch { Write-Host "WireGuard extract skipped: $_" }
           try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs" -OutFile "geoip-ir.srs" } catch {}
           try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-ir.srs" -OutFile "geosite-ir.srs" } catch {}
+          foreach ($gs in @("category-ai-!cn", "google-deepmind", "openai", "anthropic", "perplexity", "xai")) {
+            try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-$gs.srs" -OutFile "geosite-$gs.srs" } catch {}
+          }
+          foreach ($gs in @("category-ai-!cn", "google-gemini", "google-deepmind", "openai", "anthropic", "perplexity", "xai", "binance", "okx", "bybit")) {
+            try { Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-$gs.srs" -OutFile "geosite-$gs.srs" } catch {}
+          }
 
       - name: Build Windows EcholicenseVPN.exe & Setup Installer
         shell: pwsh
@@ -170,6 +177,7 @@ jobs:
           foreach ($opt in @("wireguard.exe", "tunnel.dll", "wireguard.dll", "geoip-ir.srs", "geosite-ir.srs")) {
             if (Test-Path $opt) { Copy-Item $opt -Destination "release_pkg\" }
           }
+          Get-ChildItem -Filter "*.srs" -ErrorAction SilentlyContinue | Copy-Item -Destination "release_pkg\" -Force
           Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v2.0.0.zip" -Force
 
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"

@@ -1694,6 +1694,7 @@ class EcholicenseApi:
                 socks_port=self._active_port,
                 tun_stack=stack,
                 app_dir=str(get_app_dir()),
+                ai_profile=ai_route_srv,
             )
             if isinstance(cfg, dict):
                 for inb in cfg.get("inbounds", []):
@@ -1708,43 +1709,6 @@ class EcholicenseApi:
                 if isinstance(cfg.get("route"), dict):
                     rules = cfg["route"].setdefault("rules", [])
                     rules.insert(0, {"ip_cidr": ["1.0.0.1/32"], "outbound": "direct"})
-            if ai_route_srv and isinstance(cfg, dict):
-                try:
-                    ai_cfg = build_singbox_config(
-                        profile=ai_route_srv,
-                        mode="proxy",
-                        dns_server=dns_addr,
-                        mtu=mtu,
-                        iran_split=False,
-                        adblock=False,
-                        mux_cfg={},
-                        split_mode="bypass",
-                        split_apps=[],
-                        socks_port=find_free_port(self._active_port + 1),
-                        tun_stack="system",
-                        app_dir=str(get_app_dir()),
-                    )
-                    ai_out = None
-                    for ob in (ai_cfg.get("outbounds") or []):
-                        if isinstance(ob, dict) and ob.get("tag") == "proxy":
-                            ai_out = dict(ob)
-                            break
-                    if ai_out:
-                        ai_out["tag"] = "ai-proxy"
-                        cfg.setdefault("outbounds", []).append(ai_out)
-                        if isinstance(cfg.get("route"), dict):
-                            rules = cfg["route"].setdefault("rules", [])
-                            ins_idx = 0
-                            for idx_r, r_item in enumerate(rules):
-                                if isinstance(r_item, dict) and (
-                                    r_item.get("protocol") == "dns"
-                                    or r_item.get("action") in ("sniff", "hijack-dns")
-                                    or r_item.get("ip_cidr") == ["1.0.0.1/32"]
-                                ):
-                                    ins_idx = idx_r + 1
-                            rules.insert(ins_idx, {"domain_suffix": AI_ROUTING_DOMAINS, "outbound": "ai-proxy"})
-                except Exception:
-                    pass
             cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
             if self._log_fh:
@@ -2294,12 +2258,34 @@ class EcholicenseApi:
             return None
         if self._is_ai_server(active_srv):
             return None
-        for cand in self._state.get("servers") or []:
-            if cand.get("id") == active_srv.get("id"):
-                continue
-            nm = (cand.get("name") or "").lower()
-            if self._is_ai_server(cand) or any(k in nm for k in ("us", "usa", "america", "آمریکا")):
+
+        us_re = re.compile(r"(^|[\s\-_\[\]()|•·.,/])(us|usa)([\s\-_\[\]()|•·.,/\d]|$)", re.I)
+        ir_re = re.compile(r"(^|[\s\-_\[\]()|•·.,/])(ir|iran|ایران)([\s\-_\[\]()|•·.,/\d]|$)", re.I)
+        ru_re = re.compile(r"(^|[\s\-_\[\]()|•·.,/])(ru|russia|روسیه)([\s\-_\[\]()|•·.,/\d]|$)", re.I)
+
+        def is_iran(name: str) -> bool:
+            return ("🇮🇷" in name) or ("ایران" in name) or bool(ir_re.search(name))
+
+        def is_us(name: str) -> bool:
+            low = name.lower()
+            return (
+                ("🇺🇸" in name)
+                or any(k in low for k in ("united states", "america", "آمریکا", "امریکا", "amazon", "aws"))
+                or bool(us_re.search(low))
+            )
+
+        cands = [c for c in (self._state.get("servers") or []) if c.get("id") != active_srv.get("id")]
+        for cand in cands:
+            if self._is_ai_server(cand):
                 return cand
+        for cand in cands:
+            if is_us(cand.get("name") or ""):
+                return cand
+        if is_iran(active_srv.get("name") or ""):
+            for cand in cands:
+                nm = cand.get("name") or ""
+                if not is_iran(nm) and not ru_re.search(nm) and ("🇷🇺" not in nm):
+                    return cand
         return None
 
     def _pick_failover_server(self):

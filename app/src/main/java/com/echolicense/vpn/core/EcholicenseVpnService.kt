@@ -76,6 +76,14 @@ class EcholicenseVpnService : VpnService() {
             }
             if (!outFile.exists() || outFile.length() == 0L) allReady = false
         }
+        val aiFile = File(filesDir, "geosite_ai.dat")
+        if (!aiFile.exists() || aiFile.length() == 0L) {
+            runCatching {
+                assets.open("geosite_ai.dat").use { input ->
+                    aiFile.outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+        }
         return allReady
     }
 
@@ -125,16 +133,33 @@ class EcholicenseVpnService : VpnService() {
                 }
 
                 val probePort = runCatching { java.net.ServerSocket(0).use { it.localPort } }.getOrDefault(10809)
+                val hasAiGeoFile = File(filesDir, "geosite_ai.dat").let { it.exists() && it.length() > 100L }
+                val usRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(us|usa)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
+                val irRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(ir|iran|ایران)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
+                val ruRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(ru|russia|روسیه)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
+                fun isIranSrv(name: String) = name.contains("🇮🇷") || name.contains("ایران") || irRegex.containsMatchIn(name)
+                fun isUsSrv(name: String): Boolean {
+                    val l = name.lowercase()
+                    return name.contains("🇺🇸") || l.contains("united states") || l.contains("america") ||
+                        l.contains("آمریکا") || l.contains("امریکا") || l.contains("amazon") ||
+                        l.contains("aws") || usRegex.containsMatchIn(l)
+                }
+                val hasAiGeoFile = File(filesDir, "geosite_ai.dat").let { it.exists() && it.length() > 100L }
+                val usRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(us|usa)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
+                val irRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(ir|iran|ایران)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
+                val ruRegex = Regex("""(^|[\s\-_\[\]()|•·.,/])(ru|russia|روسیه)([\s\-_\[\]()|•·.,/\d]|$)""", RegexOption.IGNORE_CASE)
+                fun isIranSrv(name: String) = name.contains("🇮🇷") || name.contains("ایران") || irRegex.containsMatchIn(name)
+                fun isUsSrv(name: String): Boolean {
+                    val l = name.lowercase()
+                    return name.contains("🇺🇸") || l.contains("united states") || l.contains("america") ||
+                        l.contains("آمریکا") || l.contains("امریکا") || l.contains("amazon") ||
+                        l.contains("aws") || usRegex.containsMatchIn(l)
+                }
                 val aiRouteServer = if (current.smartAiRoutingEnabled && !server.isAiPro()) {
-                    current.servers.firstOrNull { cand ->
-                        cand.id != server.id && (
-                            cand.isAiPro() ||
-                            cand.name.contains("us", ignoreCase = true) ||
-                            cand.name.contains("usa", ignoreCase = true) ||
-                            cand.name.contains("america", ignoreCase = true) ||
-                            cand.name.contains("آمریکا")
-                        )
-                    }
+                    val cands = current.servers.filter { it.id != server.id }
+                    cands.firstOrNull { it.isAiPro() }
+                        ?: cands.firstOrNull { isUsSrv(it.name) }
+                        ?: if (isIranSrv(server.name)) cands.firstOrNull { !isIranSrv(it.name) && !ruRegex.containsMatchIn(it.name) && !it.name.contains("🇷🇺") } else null
                 } else null
                 val configJson = XrayConfigBuilder.buildConfigJson(
                     profile = server,
@@ -145,7 +170,8 @@ class EcholicenseVpnService : VpnService() {
                     muxConfig = current.muxConfig,
                     hasGeoFiles = hasGeoFiles,
                     probePort = probePort,
-                    aiFallbackProfile = aiRouteServer
+                    aiFallbackProfile = aiRouteServer,
+                    hasAiGeoFile = hasAiGeoFile
                 )
                 startXrayTun(
                     configJson = configJson,
@@ -164,7 +190,8 @@ class EcholicenseVpnService : VpnService() {
                     )
                 }
                 val muxLabel = if (current.muxConfig.enabled) " • Mux" else ""
-                updateNotification("${server.name} • MTU: $finalMtu$muxLabel")
+                val aiNotifLabel = if (aiRouteServer != null) " • AI→${aiRouteServer.name}" else ""
+                updateNotification("${server.name} • MTU: $finalMtu$muxLabel$aiNotifLabel")
                 startTelemetryLoop()
                 VpnStateManager.update { it.copy(activeProbePort = probePort) }
                 startLivePingLoop(probePort)
