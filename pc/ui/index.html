@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Echolicense VPN v1.9.2</title>
+<title>Echolicense VPN v2.0.0</title>
 <style>
 :root {
   --bg-top: #112233;
@@ -258,7 +258,7 @@ body.connected .win-dot {
 <div class="win-titlebar">
   <div class="win-drag pywebview-drag-region">
     <span class="win-dot"></span>
-    <span>ECHOLICENSE VPN • v1.9.2</span>
+    <span>ECHOLICENSE VPN • v2.0.0</span>
   </div>
   <div class="win-controls">
     <button class="win-btn upd-btn" id="pcUpdateBtn" onclick="openUpdateModal()" title="Check for Updates">&#8635;<span class="upd-dot" id="pcUpdDot"></span></button>
@@ -277,12 +277,13 @@ body.connected .win-dot {
       <polygon points="61,21 39,55 52,55 44,85 67,48 54,48" fill="#0A1016" stroke="#7CFF4F" stroke-width="6" stroke-linejoin="round"/>
     </svg>
     <div>
-      <h1>Echolicense <span style="font-size:10px;color:var(--cyan)">v1.9</span></h1>
+      <h1>Echolicense <span style="font-size:10px;color:var(--cyan)">v2.0.0</span></h1>
       <div class="sub click" id="statusMsg" title="Click to view core logs" onclick="openLogsModal()">Ready to connect</div>
     </div>
   </div>
   <div class="top-actions">
     <div class="glass icon-btn click" onclick="openModal('subsModal')">🔗 <span data-i18n="subs">Subs</span></div>
+    <div class="glass icon-btn click" onclick="openToolsModal()" title="Tools & Diagnostics">🛠️</div>
     <div class="glass icon-btn click" onclick="openModal('settingsModal')" title="Settings">⚙️</div>
   </div>
 </div>
@@ -479,6 +480,14 @@ body.connected .win-dot {
       <label class="switch"><input type="checkbox" id="setAutoConn" onchange="saveSettings()"><span class="slider"></span></label>
     </div>
     <div class="setting-row">
+      <span>Smart Failover (Auto-Switch)</span>
+      <label class="switch"><input type="checkbox" id="setFailover" onchange="saveSettings()"><span class="slider"></span></label>
+    </div>
+    <div class="setting-row">
+      <span>Smart AI Routing (AI via US)</span>
+      <label class="switch"><input type="checkbox" id="setAiRoute" onchange="saveSettings()"><span class="slider"></span></label>
+    </div>
+    <div class="setting-row">
       <span>AdBlocker (Ads & YouTube)</span>
       <label class="switch"><input type="checkbox" id="setAdblock" onchange="saveSettings()"><span class="slider"></span></label>
     </div>
@@ -513,13 +522,32 @@ body.connected .win-dot {
       <strong id="updModalTitle">App Update</strong>
       <span class="click" onclick="closeModal('updateModal')">✕</span>
     </div>
-    <div style="font-size:12px;color:var(--muted)" id="updCurrentVer">Current version: v1.9.2</div>
+    <div style="font-size:12px;color:var(--muted)" id="updCurrentVer">Current version: v2.0.0</div>
     <div style="font-size:13px;font-weight:700;color:var(--cyan);margin-top:4px" id="updLatestVer">Latest on server: --</div>
     <div style="font-size:12px;margin-top:8px;line-height:1.5" id="updStatusText">Checking...</div>
     <div class="upd-prog-bg" id="updProgBg"><div class="upd-prog-fill" id="updProgFill"></div></div>
     <div class="row" style="gap:8px;margin-top:12px">
       <button class="btn" id="updInstallBtn" onclick="startPcUpdate()" style="flex:1">Download & Install</button>
       <button class="btn btn-outline" id="updCheckBtn" onclick="checkPcUpdate()" style="width:auto;padding:8px 12px">↻</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="toolsModal">
+  <div class="modal">
+    <h2><span>🛠️ Tools & Diagnostics</span><span class="click" onclick="closeModal('toolsModal')">✕</span></h2>
+    <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:11px;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:700;color:var(--cyan);margin-bottom:6px">IP & AI Health Check</div>
+      <div id="healthRes" style="font-size:11.5px;color:var(--muted);line-height:1.6;margin-bottom:8px">Check active IP, country & reachability of ChatGPT, Gemini and Claude.</div>
+      <button class="btn" id="healthRunBtn" onclick="runHealthCheck()" style="padding:8px">Run Health Check</button>
+    </div>
+    <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:11px">
+      <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:5px">1-Click Support Diagnostics</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Copies a privacy-safe diagnostic summary (no sub link or keys) for @echopress_bot.</div>
+      <div class="row" style="gap:8px">
+        <button class="btn" id="diagCopyBtn" onclick="copyDiagReport()" style="flex:1;padding:8px">Copy Report</button>
+        <button class="btn btn-outline" onclick="openExternal('https://t.me/echopress_bot')" style="width:auto;padding:8px 12px">Support Bot</button>
+      </div>
     </div>
   </div>
 </div>
@@ -677,7 +705,7 @@ function render(st) {
   if (uTitle) {
     const uFa = st.language === 'fa';
     uTitle.textContent = uFa ? 'به‌روزرسانی اپلیکیشن' : 'App Update';
-    document.getElementById('updCurrentVer').textContent = uFa ? `نسخه فعلی: v${st.version || '1.9.2'}` : `Current version: v${st.version || '1.9.2'}`;
+    document.getElementById('updCurrentVer').textContent = uFa ? `نسخه فعلی: v${st.version || '2.0.0'}` : `Current version: v${st.version || '2.0.0'}`;
     const sz = u.sizeMb > 0 ? ` (${Number(u.sizeMb).toFixed(1)} MB)` : '';
     const latEl = document.getElementById('updLatestVer');
     latEl.textContent = u.latestTag
@@ -715,6 +743,8 @@ function render(st) {
   // Settings sync
   document.getElementById('setStartup').checked = !!st.startupApp;
   document.getElementById('setAutoConn').checked = !!st.autoConnect;
+  document.getElementById('setFailover').checked = st.smartFailover !== false;
+  document.getElementById('setAiRoute').checked = !!st.smartAiRouting;
   document.getElementById('setAdblock').checked = !!st.adBlocker;
   document.getElementById('setMux').checked = !!(st.mux && st.mux.enabled);
   document.getElementById('setAutoMtu').checked = !!st.autoMtu;
@@ -780,6 +810,8 @@ async function saveSettings() {
   const patch = {
     startupApp: document.getElementById('setStartup').checked,
     autoConnect: document.getElementById('setAutoConn').checked,
+    smartFailover: document.getElementById('setFailover').checked,
+    smartAiRouting: document.getElementById('setAiRoute').checked,
     adBlocker: document.getElementById('setAdblock').checked,
     autoMtu: document.getElementById('setAutoMtu').checked,
     mtu: parseInt(document.getElementById('setMtu').value) || 1360,
@@ -787,6 +819,36 @@ async function saveSettings() {
     mux: { enabled: document.getElementById('setMux').checked, concurrency: 8, xudp: 16 },
   };
   render(await pywebview.api.update_settings(patch));
+}
+function openToolsModal() {
+  document.getElementById('diagCopyBtn').textContent = 'Copy Report';
+  openModal('toolsModal');
+}
+async function runHealthCheck() {
+  const btn = document.getElementById('healthRunBtn');
+  const box = document.getElementById('healthRes');
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+  try {
+    const r = await pywebview.api.run_health_check();
+    let html = `<div><strong style="color:#fff">IP:</strong> ${r.ip || '--'} (${r.viaVpn ? 'VPN' : 'Direct'})</div>`;
+    html += `<div>${r.location || '--'} • ${r.isp || '--'}</div><div style="margin-top:6px;display:grid;gap:4px">`;
+    (r.services || []).forEach(s => {
+      const col = s.status === 'OK' ? 'var(--green)' : (s.status === 'WARN' ? '#F59E0B' : '#FF5A6E');
+      html += `<div style="display:flex;justify-content:space-between"><span>${s.name}</span><strong style="color:${col}">${s.status} (${s.detail})</strong></div>`;
+    });
+    html += '</div>';
+    box.innerHTML = html;
+  } catch (e) {
+    box.textContent = 'Check failed: ' + e;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Run Health Check';
+}
+async function copyDiagReport() {
+  const txt = await pywebview.api.get_diagnostics_report();
+  try { await navigator.clipboard.writeText(txt); } catch (e) {}
+  document.getElementById('diagCopyBtn').textContent = 'Copied ✓';
 }
 async function toggleLang() {
   const next = S.language === 'fa' ? 'en' : 'fa';

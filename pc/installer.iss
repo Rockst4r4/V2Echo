@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "1.9.2"
+  #define AppVersion "2.0.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "release_pkg"
@@ -49,6 +49,11 @@ Name: "{autodesktop}\Echolicense VPN"; Filename: "{app}\EcholicenseVPN.exe"; Tas
 
 [Run]
 Filename: "{app}\EcholicenseVPN.exe"; Description: "Launch Echolicense VPN"; Flags: nowait postinstall shellexec
+
+[Registry]
+Root: HKCR; Subkey: "echolicense"; ValueType: string; ValueName: ""; ValueData: "URL:Echolicense Protocol"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "echolicense"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCR; Subkey: "echolicense\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\EcholicenseVPN.exe"" ""%1"""
 
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;

@@ -125,6 +125,17 @@ class EcholicenseVpnService : VpnService() {
                 }
 
                 val probePort = runCatching { java.net.ServerSocket(0).use { it.localPort } }.getOrDefault(10809)
+                val aiRouteServer = if (current.smartAiRoutingEnabled && !server.isAiPro()) {
+                    current.servers.firstOrNull { cand ->
+                        cand.id != server.id && (
+                            cand.isAiPro() ||
+                            cand.name.contains("us", ignoreCase = true) ||
+                            cand.name.contains("usa", ignoreCase = true) ||
+                            cand.name.contains("america", ignoreCase = true) ||
+                            cand.name.contains("آمریکا")
+                        )
+                    }
+                } else null
                 val configJson = XrayConfigBuilder.buildConfigJson(
                     profile = server,
                     primaryDns = resolvedDns,
@@ -133,7 +144,8 @@ class EcholicenseVpnService : VpnService() {
                     mtu = finalMtu,
                     muxConfig = current.muxConfig,
                     hasGeoFiles = hasGeoFiles,
-                    probePort = probePort
+                    probePort = probePort,
+                    aiFallbackProfile = aiRouteServer
                 )
                 startXrayTun(
                     configJson = configJson,
@@ -192,20 +204,32 @@ class EcholicenseVpnService : VpnService() {
             builder.setMetered(false)
         }
 
-        val bypassPackages = if (enableIranSplit) {
-            IranSplitTunnel.getInstalledBypassPackages(this)
+        val stSplit = VpnStateManager.state.value
+        val onlyMode = stSplit.appSplitMode == "only" && stSplit.customSplitPackages.isNotEmpty()
+        if (onlyMode) {
+            stSplit.customSplitPackages.filter { it != packageName }.forEach { pkg ->
+                runCatching { builder.addAllowedApplication(pkg) }
+            }
         } else {
-            listOf(packageName)
-        }
-        bypassPackages.forEach { pkg ->
-            runCatching { builder.addDisallowedApplication(pkg) }
+            val bypassPackages = linkedSetOf<String>()
+            if (enableIranSplit) {
+                bypassPackages.addAll(IranSplitTunnel.getInstalledBypassPackages(this))
+            } else {
+                bypassPackages.add(packageName)
+            }
+            bypassPackages.addAll(stSplit.customSplitPackages)
+            bypassPackages.forEach { pkg ->
+                runCatching { builder.addDisallowedApplication(pkg) }
+            }
         }
 
         tunInterface = builder.apply {
-                if (com.echolicense.vpn.core.VpnStateManager.state.value.lanMirrorBypassEnabled) {
+                if (stSplit.lanMirrorBypassEnabled) {
                     runCatching { allowBypass() }
-                    com.echolicense.vpn.data.IranSplitTunnel.getInstalledLanMirrorPackages(this@EcholicenseVpnService).forEach { pkg ->
-                        runCatching { addDisallowedApplication(pkg) }
+                    if (!onlyMode) {
+                        com.echolicense.vpn.data.IranSplitTunnel.getInstalledLanMirrorPackages(this@EcholicenseVpnService).forEach { pkg ->
+                            runCatching { addDisallowedApplication(pkg) }
+                        }
                     }
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
                         listOf(
@@ -273,6 +297,8 @@ class EcholicenseVpnService : VpnService() {
         pingJob?.cancel()
         pingJob = scope.launch {
             delay(1400)
+            var consecutiveVpnFails = 0
+            var lastFailoverAt = 0L
             while (isActive && VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
                 val directDeferred = async(Dispatchers.IO) {
                     LivePingMonitor.probeDirect1111(
@@ -301,6 +327,42 @@ class EcholicenseVpnService : VpnService() {
                         directAttempts = nextDirectAttempts,
                         vpnAttempts = nextVpnAttempts
                     )
+                }
+
+                // Smart Failover: جابه‌جایی خودکار به سالم‌ترین سرور بعدی هنگام قطعی متوالی تونل
+                if (vMs <= 0) consecutiveVpnFails++ else consecutiveVpnFails = 0
+                if (consecutiveVpnFails >= 3) {
+                    val stNow = VpnStateManager.state.value
+                    val nowMs = System.currentTimeMillis()
+                    if (stNow.smartFailoverEnabled && stNow.connectedSeconds >= 10 && nowMs - lastFailoverAt > 45_000L) {
+                        val pool = when {
+                            stNow.gamingOnly -> stNow.servers.filter { it.isGaming() }.ifEmpty { stNow.servers }
+                            stNow.aiProOnly -> stNow.servers.filter { it.isAiPro() }.ifEmpty { stNow.servers }
+                            else -> stNow.servers
+                        }.filter { it.id != stNow.activeServer?.id }
+
+                        val nextSrv = pool.filter { it.pingMs > 0 }.minByOrNull { it.pingMs } ?: pool.firstOrNull()
+                        if (nextSrv != null) {
+                            lastFailoverAt = nowMs
+                            consecutiveVpnFails = 0
+                            val isEnMsg = stNow.language == AppLanguage.EN
+                            VpnStateManager.update {
+                                it.copy(
+                                    activeServer = nextSrv,
+                                    vpnPingMs = -1,
+                                    vpnJitterMs = -1,
+                                    vpnPingHistory = emptyList(),
+                                    vpnAttempts = emptyList(),
+                                    statusMessage = if (isEnMsg) "Failover → ${nextSrv.name}" else "تغییر خودکار سرور ← ${nextSrv.name}"
+                                )
+                            }
+                            scope.launch {
+                                stopVpn(stopSelfNow = false)
+                                startVpn()
+                            }
+                            return@launch
+                        }
+                    }
                 }
                 delay(2500)
             }

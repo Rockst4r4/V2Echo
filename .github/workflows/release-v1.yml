@@ -1,4 +1,4 @@
-name: Echolicense v1.9.2 Official Release (Android + PC)
+name: Echolicense v2.0.0 Official Release (Android + PC)
 
 on:
   push:
@@ -107,16 +107,16 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           gradle assembleRelease bundleRelease
-          cp app/build/outputs/apk/release/app-release.apk Echolicense-Android-v1.9.2.apk
-          cp app/build/outputs/bundle/release/app-release.aab Echolicense-Android-v1.9.2.aab
+          cp app/build/outputs/apk/release/app-release.apk Echolicense-Android-v2.0.0.apk
+          cp app/build/outputs/bundle/release/app-release.aab Echolicense-Android-v2.0.0.aab
 
       - name: Upload Android Release Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Echolicense-Android-v1.9.2
+          name: Echolicense-Android-v2.0.0
           path: |
-            Echolicense-Android-v1.9.2.apk
-            Echolicense-Android-v1.9.2.aab
+            Echolicense-Android-v2.0.0.apk
+            Echolicense-Android-v2.0.0.aab
 
   build-windows-pc:
     runs-on: windows-latest
@@ -139,7 +139,7 @@ jobs:
         shell: pwsh
         working-directory: pc
         run: |
-          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v1.10.7/sing-box-1.10.7-windows-amd64.zip" -OutFile "singbox.zip"
+          Invoke-WebRequest -Uri "https://github.com/SagerNet/sing-box/releases/download/v2.0.0/sing-box-1.10.7-windows-amd64.zip" -OutFile "singbox.zip"
           Expand-Archive -Path "singbox.zip" -DestinationPath "singbox_tmp" -Force
           Copy-Item "singbox_tmp\sing-box-1.10.7-windows-amd64\sing-box.exe" -Destination "sing-box.exe"
           Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "wintun.zip"
@@ -170,7 +170,7 @@ jobs:
           foreach ($opt in @("wireguard.exe", "tunnel.dll", "wireguard.dll", "geoip-ir.srs", "geosite-ir.srs")) {
             if (Test-Path $opt) { Copy-Item $opt -Destination "release_pkg\" }
           }
-          Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v1.9.2.zip" -Force
+          Compress-Archive -Path "release_pkg\*" -DestinationPath "..\Echolicense-Windows-v2.0.0.zip" -Force
 
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
@@ -182,16 +182,16 @@ jobs:
               $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
             }
           }
-          & $iscc "/DAppVersion=1.9.2" "/DSourceDir=release_pkg" "/DOutputDir=.." "/DIconFile=assets\icon.ico" "installer.iss"
+          & $iscc "/DAppVersion=2.0.0" "/DSourceDir=release_pkg" "/DOutputDir=.." "/DIconFile=assets\icon.ico" "installer.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows PC Release Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Echolicense-Windows-v1.9.2
+          name: Echolicense-Windows-v2.0.0
           path: |
-            Echolicense-Windows-Setup-v1.9.2.exe
-            Echolicense-Windows-v1.9.2.zip
+            Echolicense-Windows-Setup-v2.0.0.exe
+            Echolicense-Windows-v2.0.0.zip
 
   publish-release:
     needs: [build-android, build-windows-pc]
@@ -201,16 +201,16 @@ jobs:
         with:
           path: release-files
 
-      - name: Publish Official GitHub Release v1.9.2
+      - name: Publish Official GitHub Release v2.0.0
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.9.2
-          name: "Echolicense VPN v1.9.2 (Android + Windows PC)"
+          tag_name: v2.0.0
+          name: "Echolicense VPN v2.0.0 (Android + Windows PC)"
           body: |
-            ## Echolicense VPN v1.9.2 Official Release
-            - **Windows PC Installer**: Official Setup (`Echolicense-Windows-Setup-v1.9.2.exe`) with Start Menu & Desktop shortcut + clean uninstall
-            - **Windows PC Portable**: Portable archive (`Echolicense-Windows-v1.9.2.zip`)
-            - **Android**: Signed Release APK (`Echolicense-Android-v1.9.2.apk`) & Google Play AAB (`Echolicense-Android-v1.9.2.aab`)
+            ## Echolicense VPN v2.0.0 Official Release
+            - **Windows PC Installer**: Official Setup (`Echolicense-Windows-Setup-v2.0.0.exe`) with Start Menu & Desktop shortcut + clean uninstall
+            - **Windows PC Portable**: Portable archive (`Echolicense-Windows-v2.0.0.zip`)
+            - **Android**: Signed Release APK (`Echolicense-Android-v2.0.0.apk`) & Google Play AAB (`Echolicense-Android-v2.0.0.aab`)
           files: |
-            release-files/Echolicense-Android-v1.9.2/*
-            release-files/Echolicense-Windows-v1.9.2/*
+            release-files/Echolicense-Android-v2.0.0/*
+            release-files/Echolicense-Windows-v2.0.0/*

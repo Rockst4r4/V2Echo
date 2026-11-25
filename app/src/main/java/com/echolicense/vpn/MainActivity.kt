@@ -51,6 +51,10 @@ class MainActivity : ComponentActivity() {
         private const val KEY_ADBLOCK = "adblock_enabled"
         private const val KEY_LAN_MIRROR = "lan_mirror_bypass"
         private const val KEY_GPS_OVERRIDE = "ai_pro_gps_override"
+        private const val KEY_SMART_FAILOVER = "smart_failover"
+        private const val KEY_SMART_AI_ROUTING = "smart_ai_routing"
+        private const val KEY_APP_SPLIT_MODE = "app_split_mode"
+        private const val KEY_CUSTOM_SPLIT_APPS = "custom_split_apps"
         private const val KEY_SUBS_JSON = "saved_subscriptions_json"
         private const val KEY_ACTIVE_SUB_ID = "active_subscription_id"
         private const val KEY_MUX_ENABLED = "mux_enabled"
@@ -92,6 +96,7 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra(AppUpdateNotifier.EXTRA_OPEN_UPDATE)
             VpnStateManager.update { it.copy(openUpdateDialogRequest = true) }
         }
+        handleDeepLinkIntent(intent)
     }
 
     override fun onStart() {
@@ -141,6 +146,10 @@ class MainActivity : ComponentActivity() {
         val savedAdBlock = prefs.getBoolean(KEY_ADBLOCK, true)
         val savedLanMirror = prefs.getBoolean(KEY_LAN_MIRROR, true)
         val savedGpsOverride = prefs.getBoolean(KEY_GPS_OVERRIDE, true)
+        val savedSmartFailover = prefs.getBoolean(KEY_SMART_FAILOVER, true)
+        val savedSmartAiRouting = prefs.getBoolean(KEY_SMART_AI_ROUTING, false)
+        val savedAppSplitMode = prefs.getString(KEY_APP_SPLIT_MODE, "bypass") ?: "bypass"
+        val savedCustomSplitApps = prefs.getStringSet(KEY_CUSTOM_SPLIT_APPS, emptySet())?.toSet() ?: emptySet()
         val savedMtu = prefs.getInt(KEY_MTU, 1360).coerceIn(1200, 1500)
         val savedAutoMtu = prefs.getBoolean(KEY_AUTO_MTU, true)
         val savedManualDns = prefs.getString(KEY_MANUAL_DNS, "").orEmpty()
@@ -168,6 +177,10 @@ class MainActivity : ComponentActivity() {
                 adBlockerEnabled = savedAdBlock,
                 lanMirrorBypassEnabled = savedLanMirror,
                 aiProGpsOverrideEnabled = savedGpsOverride,
+                smartFailoverEnabled = savedSmartFailover,
+                smartAiRoutingEnabled = savedSmartAiRouting,
+                appSplitMode = savedAppSplitMode,
+                customSplitPackages = savedCustomSplitApps,
                 mtu = savedMtu,
                 autoMtuEnabled = savedAutoMtu,
                 manualDns = savedManualDns,
@@ -186,6 +199,7 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra(AppUpdateNotifier.EXTRA_OPEN_UPDATE)
             VpnStateManager.update { it.copy(openUpdateDialogRequest = true) }
         }
+        handleDeepLinkIntent(intent)
 
         if (activeSub != null) {
             SubscriptionAutoUpdateWorker.schedule(this, replace = false)
@@ -241,6 +255,24 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onOpenDevOptions = { openMockLocationSettings() },
+                    onToggleSmartFailover = { enabled ->
+                        prefs.edit().putBoolean(KEY_SMART_FAILOVER, enabled).apply()
+                        VpnStateManager.update { it.copy(smartFailoverEnabled = enabled) }
+                    },
+                    onToggleSmartAiRouting = { enabled ->
+                        prefs.edit().putBoolean(KEY_SMART_AI_ROUTING, enabled).apply()
+                        VpnStateManager.update { it.copy(smartAiRoutingEnabled = enabled) }
+                        if (VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
+                            dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
+                        }
+                    },
+                    onUpdateAppSplit = { mode, pkgs ->
+                        prefs.edit().putString(KEY_APP_SPLIT_MODE, mode).putStringSet(KEY_CUSTOM_SPLIT_APPS, pkgs).apply()
+                        VpnStateManager.update { it.copy(appSplitMode = mode, customSplitPackages = pkgs) }
+                        if (VpnStateManager.state.value.connectionState == ConnectionState.CONNECTED) {
+                            dispatchVpnAction(EcholicenseVpnService.ACTION_RECONNECT)
+                        }
+                    },
                     onCheckUpdate = { checkAppUpdate(silent = false) },
                     onDownloadInstallUpdate = { downloadAndInstallUpdate() },
                     onToggleAdBlocker = { enabled ->
@@ -660,6 +692,22 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+        }
+    }
+
+    private fun handleDeepLinkIntent(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (!data.scheme.equals("echolicense", ignoreCase = true)) return
+        val rawUrl = data.getQueryParameter("url")
+            ?: data.getQueryParameter("sub")
+            ?: data.getQueryParameter("config")
+            ?: data.fragment?.takeIf { it.startsWith("http", true) || it.contains("://") }
+        val name = data.getQueryParameter("name").orEmpty().ifBlank {
+            if (VpnStateManager.state.value.language == AppLanguage.FA) "اشتراک تلگرام" else "Telegram Plan"
+        }
+        if (!rawUrl.isNullOrBlank()) {
+            intent.data = null
+            handleAddSubscription(name, rawUrl.trim())
         }
     }
 }

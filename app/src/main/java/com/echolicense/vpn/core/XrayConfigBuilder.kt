@@ -22,7 +22,8 @@ object XrayConfigBuilder {
         mtu: Int,
         muxConfig: MuxConfig,
         hasGeoFiles: Boolean,
-        probePort: Int = 0
+        probePort: Int = 0,
+        aiFallbackProfile: ServerProfile? = null
     ): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "none"))
@@ -49,6 +50,15 @@ object XrayConfigBuilder {
         )
 
         val dnsServers = JSONArray()
+        if (aiFallbackProfile != null && aiFallbackProfile.id != profile.id &&
+            aiFallbackProfile.host.isNotBlank() && !IPV4_REGEX.matches(aiFallbackProfile.host) && !aiFallbackProfile.host.contains(":")
+        ) {
+            dnsServers.put(
+                JSONObject()
+                    .put("address", "localhost")
+                    .put("domains", JSONArray().put("full:${aiFallbackProfile.host}"))
+            )
+        }
         if (profile.host.isNotBlank() && !IPV4_REGEX.matches(profile.host) && !profile.host.contains(":")) {
             dnsServers.put(
                 JSONObject()
@@ -134,6 +144,16 @@ object XrayConfigBuilder {
         }
 
         outbounds.put(proxyOutbound)
+        val useAiRoute = aiFallbackProfile != null && aiFallbackProfile.id != profile.id
+        if (useAiRoute && aiFallbackProfile != null) {
+            val aiOutbound = when (aiFallbackProfile.protocol) {
+                VpnProtocol.WIREGUARD -> buildWireGuardOutbound(aiFallbackProfile, safeMtu)
+                VpnProtocol.VMESS -> buildVmessOutbound(aiFallbackProfile)
+                VpnProtocol.VLESS, VpnProtocol.TROJAN -> buildUriOutbound(aiFallbackProfile, false)
+            }
+            aiOutbound.put("tag", "ai-proxy")
+            outbounds.put(aiOutbound)
+        }
         outbounds.put(
             JSONObject()
                 .put("tag", "direct")
@@ -228,6 +248,31 @@ object XrayConfigBuilder {
                     .put("type", "field")
                     .put("domain", adDomains)
                     .put("outboundTag", "block")
+            )
+        }
+
+        if (useAiRoute) {
+            val aiDomains = JSONArray()
+                .put("domain:openai.com")
+                .put("domain:chatgpt.com")
+                .put("domain:oaistatic.com")
+                .put("domain:oaiusercontent.com")
+                .put("domain:anthropic.com")
+                .put("domain:claude.ai")
+                .put("domain:gemini.google.com")
+                .put("domain:generativelanguage.googleapis.com")
+                .put("domain:aistudio.google.com")
+                .put("domain:perplexity.ai")
+                .put("domain:x.ai")
+                .put("domain:grok.com")
+                .put("domain:binance.com")
+                .put("domain:bybit.com")
+                .put("domain:okx.com")
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put("domain", aiDomains)
+                    .put("outboundTag", "ai-proxy")
             )
         }
 

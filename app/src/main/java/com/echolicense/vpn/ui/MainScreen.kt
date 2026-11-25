@@ -34,7 +34,14 @@ import com.echolicense.vpn.core.VpnUiState
 import com.echolicense.vpn.BuildConfig
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.ui.platform.LocalContext
+import com.echolicense.vpn.core.IpHealthReport
+import com.echolicense.vpn.core.ToolsDiagnosticsManager
 import com.echolicense.vpn.data.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.echolicense.vpn.ui.theme.*
 import java.util.Locale
 
@@ -56,6 +63,9 @@ fun MainScreen(
     onToggleLanMirrorBypass: (Boolean) -> Unit,
     onToggleGpsOverride: (Boolean) -> Unit,
     onOpenDevOptions: () -> Unit,
+    onToggleSmartFailover: (Boolean) -> Unit,
+    onToggleSmartAiRouting: (Boolean) -> Unit,
+    onUpdateAppSplit: (String, Set<String>) -> Unit,
     onCheckUpdate: () -> Unit,
     onDownloadInstallUpdate: () -> Unit,
     onToggleAdBlocker: (Boolean) -> Unit,
@@ -76,6 +86,9 @@ fun MainScreen(
     var showDnsDialog by remember { mutableStateOf(false) }
     var showMuxDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var showToolsDialog by remember { mutableStateOf(false) }
+    var showAppSplitDialog by remember { mutableStateOf(false) }
+    var showAdvancedSettings by remember { mutableStateOf(false) }
     LaunchedEffect(uiState.openUpdateDialogRequest) {
         if (uiState.openUpdateDialogRequest) {
             showUpdateDialog = true
@@ -132,6 +145,17 @@ fun MainScreen(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    LiquidGlassCard(
+                        cornerRadius = 14.dp,
+                        modifier = Modifier.bounceClick { showToolsDialog = true }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Build,
+                            contentDescription = "Tools",
+                            tint = CyanLiquid,
+                            modifier = Modifier.padding(8.dp).size(18.dp)
+                        )
+                    }
                     LiquidGlassCard(
                         cornerRadius = 14.dp,
                         highlightColor = if (uiState.updateAvailable) EmeraldGlow else GlassBorderTop,
@@ -549,6 +573,111 @@ fun MainScreen(
                             colors = SwitchDefaults.colors(checkedTrackColor = CyanLiquid)
                         )
                     }
+
+                    HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+
+                    val isFaAdv = uiState.language == AppLanguage.FA
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .bounceClick { showAdvancedSettings = !showAdvancedSettings }
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isFaAdv) "امکانات هوشمند و تفکیک اپ‌ها" else "Smart Routing & App Split",
+                            color = CyanLiquid,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Icon(
+                            imageVector = if (showAdvancedSettings) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = CyanLiquid,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    AnimatedVisibility(visible = showAdvancedSettings) {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(vertical = 4.dp)) {
+                                    Text(
+                                        if (isFaAdv) "تغییر خودکار سرور (Smart Failover)" else "Smart Failover",
+                                        color = Color.White,
+                                        fontSize = 12.5.sp
+                                    )
+                                    Text(
+                                        if (isFaAdv) "سوییچ خودکار به سرور سالم بعدی هنگام قطعی" else "Auto-switch server if tunnel drops",
+                                        color = Color.White.copy(alpha = 0.58f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                Switch(
+                                    checked = uiState.smartFailoverEnabled,
+                                    onCheckedChange = onToggleSmartFailover,
+                                    colors = SwitchDefaults.colors(checkedTrackColor = EmeraldGlow)
+                                )
+                            }
+
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(vertical = 4.dp)) {
+                                    Text(
+                                        if (isFaAdv) "مسیریابی هوشمند AI (Smart AI Routing)" else "Smart AI Routing",
+                                        color = Color.White,
+                                        fontSize = 12.5.sp
+                                    )
+                                    Text(
+                                        if (isFaAdv) "عبور خودکار دامنه‌های AI از سرور آمریکا در مولتی‌لوکیشن" else "Route AI/Trade domains via US/AI server automatically",
+                                        color = Color.White.copy(alpha = 0.58f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                Switch(
+                                    checked = uiState.smartAiRoutingEnabled,
+                                    onCheckedChange = onToggleSmartAiRouting,
+                                    colors = SwitchDefaults.colors(checkedTrackColor = AiProAccent)
+                                )
+                            }
+
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .bounceClick { showAppSplitDialog = true }
+                                    .padding(vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        if (isFaAdv) "انتخاب دستی برنامه‌ها (Per-App Split)" else "Per-App Split Tunneling",
+                                        color = Color.White,
+                                        fontSize = 12.5.sp
+                                    )
+                                    val modeLbl = if (uiState.appSplitMode == "only") {
+                                        if (isFaAdv) "فقط اپ‌های انتخابی (${uiState.customSplitPackages.size})" else "Only selected (${uiState.customSplitPackages.size})"
+                                    } else {
+                                        if (isFaAdv) "عبور مستقیم اپ‌های انتخابی (${uiState.customSplitPackages.size})" else "Bypass selected (${uiState.customSplitPackages.size})"
+                                    }
+                                    Text(modeLbl, color = CyanLiquid.copy(alpha = 0.85f), fontSize = 10.5.sp)
+                                }
+                                Icon(Icons.Rounded.Apps, null, tint = CyanLiquid, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
                 }
             }
 
@@ -651,6 +780,27 @@ fun MainScreen(
             onSave = {
                 showDnsDialog = false
                 onSaveManualDns(it)
+            }
+        )
+    }
+
+    if (showToolsDialog) {
+        ToolsDiagnosticsDialog(
+            uiState = uiState,
+            onDismiss = { showToolsDialog = false },
+            onOpenBot = onOpenBot
+        )
+    }
+
+    if (showAppSplitDialog) {
+        AppSplitDialog(
+            isFa = uiState.language == AppLanguage.FA,
+            initialMode = uiState.appSplitMode,
+            initialPackages = uiState.customSplitPackages,
+            onDismiss = { showAppSplitDialog = false },
+            onSave = { mode, pkgs ->
+                showAppSplitDialog = false
+                onUpdateAppSplit(mode, pkgs)
             }
         )
     }
@@ -1734,6 +1884,276 @@ private fun AppUpdateDialog(
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !uiState.isDownloadingUpdate) {
                 Text(if (isFa) "بستن" else "Close", color = Color.White.copy(alpha = 0.7f))
+            }
+        }
+    )
+}
+
+
+@Composable
+private fun ToolsDiagnosticsDialog(
+    uiState: VpnUiState,
+    onDismiss: () -> Unit,
+    onOpenBot: () -> Unit
+) {
+    val isFa = uiState.language == AppLanguage.FA
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<IpHealthReport?>(null) }
+    var copiedMsg by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF0E1722),
+        titleContentColor = Color.White,
+        textContentColor = Color.White,
+        title = {
+            Text(
+                text = if (isFa) "ابزارها و عیب‌یابی سریع" else "Tools & Diagnostics",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 1. IP & AI Health Check
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = if (isFa) "تست سلامت IP و سرویس‌های هوش مصنوعی" else "IP & AI Services Health Check",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CyanLiquid
+                    )
+                    if (report != null) {
+                        val rep = report!!
+                        Text("IP: ${rep.ip}", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                        Text("${rep.location} • ${rep.isp}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.72f))
+                        Spacer(Modifier.height(4.dp))
+                        rep.services.forEach { svc ->
+                            val col = when (svc.status) {
+                                "OK" -> EmeraldGlow
+                                "WARN" -> Color(0xFFF59E0B)
+                                else -> Color(0xFFFF5A6E)
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(svc.name, fontSize = 12.sp, color = Color.White)
+                                Text("${svc.status} (${svc.detail})", fontSize = 11.sp, color = col, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = if (isFa) "بررسی آی‌پی فعلی، کشور و دسترسی به ChatGPT، Gemini و Claude" else "Check active IP, country & access to ChatGPT, Gemini & Claude",
+                            fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.65f)
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            if (!checking) {
+                                checking = true
+                                scope.launch {
+                                    val res = withContext(Dispatchers.IO) {
+                                        ToolsDiagnosticsManager.runHealthCheck(uiState.activeProbePort)
+                                    }
+                                    report = res
+                                    checking = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanLiquid.copy(alpha = 0.2f), contentColor = CyanLiquid)
+                    ) {
+                        if (checking) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = CyanLiquid)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(if (checking) (if (isFa) "در حال بررسی..." else "Checking...") else (if (isFa) "شروع تست سلامت" else "Run Health Check"), fontSize = 12.sp)
+                    }
+                }
+
+                // 2. 1-Click Support Diagnostics
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = if (isFa) "گزارش مشکل برای پشتیبانی (1-Click)" else "1-Click Support Diagnostics",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = EmeraldGlow
+                    )
+                    Text(
+                        text = if (isFa) "خلاصه فنی اتصال (بدون لینک اشتراک و اطلاعات محرمانه) کپی می‌شود تا برای پشتیبانی بفرستید." else "Copies a privacy-safe technical summary for fast troubleshooting.",
+                        fontSize = 11.sp,
+                        color = Color.White.copy(alpha = 0.68f)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = {
+                                val text = ToolsDiagnosticsManager.buildDiagnosticReport(uiState, BuildConfig.VERSION_NAME)
+                                clipboard.setText(AnnotatedString(text))
+                                copiedMsg = true
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldGlow.copy(alpha = 0.2f), contentColor = EmeraldGlow)
+                        ) {
+                            Text(if (copiedMsg) (if (isFa) "کپی شد ✓" else "Copied ✓") else (if (isFa) "کپی گزارش" else "Copy Report"), fontSize = 11.5.sp)
+                        }
+                        OutlinedButton(
+                            onClick = onOpenBot,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(if (isFa) "ارسال به ربات" else "Support Bot", fontSize = 11.5.sp, color = Color.White)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (isFa) "بستن" else "Close", color = CyanLiquid)
+            }
+        }
+    )
+}
+
+@Composable
+private fun AppSplitDialog(
+    isFa: Boolean,
+    initialMode: String,
+    initialPackages: Set<String>,
+    onDismiss: () -> Unit,
+    onSave: (String, Set<String>) -> Unit
+) {
+    val context = LocalContext.current
+    var mode by remember { mutableStateOf(initialMode) }
+    var selected by remember { mutableStateOf(initialPackages) }
+    var query by remember { mutableStateOf("") }
+    var apps by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        apps = withContext(Dispatchers.IO) { ToolsDiagnosticsManager.loadInstalledUserApps(context) }
+        loading = false
+    }
+
+    val filtered = remember(apps, query, selected) {
+        val q = query.trim().lowercase()
+        apps.filter { (pkg, lbl) -> q.isEmpty() || lbl.lowercase().contains(q) || pkg.lowercase().contains(q) }
+            .sortedByDescending { selected.contains(it.first) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF0E1722),
+        titleContentColor = Color.White,
+        textContentColor = Color.White,
+        title = {
+            Text(
+                text = if (isFa) "تفکیک دستی برنامه‌ها" else "Per-App Split Tunneling",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    val isBypass = mode != "only"
+                    Button(
+                        onClick = { mode = "bypass" },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isBypass) CyanLiquid else Color.White.copy(alpha = 0.08f),
+                            contentColor = if (isBypass) Color(0xFF04130F) else Color.White
+                        ),
+                        contentPadding = PaddingValues(vertical = 6.dp)
+                    ) {
+                        Text(if (isFa) "عبور مستقیم" else "Bypass", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { mode = "only" },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (!isBypass) AiProAccent else Color.White.copy(alpha = 0.08f),
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(vertical = 6.dp)
+                    ) {
+                        Text(if (isFa) "فقط این اپ‌ها" else "Only selected", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text(if (isFa) "جستجوی برنامه..." else "Search apps...", fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (loading) {
+                    Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = CyanLiquid)
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 260.dp)) {
+                        items(filtered, key = { it.first }) { (pkg, lbl) ->
+                            val isChecked = selected.contains(pkg)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selected = if (isChecked) selected - pkg else selected + pkg
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { chk -> selected = if (chk) selected + pkg else selected - pkg },
+                                    colors = CheckboxDefaults.colors(checkedColor = CyanLiquid)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(lbl, fontSize = 12.5.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(pkg, fontSize = 10.sp, color = Color.White.copy(alpha = 0.5f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(mode, selected) },
+                colors = ButtonDefaults.buttonColors(containerColor = EmeraldGlow, contentColor = Color(0xFF04130F))
+            ) {
+                Text(if (isFa) "ذخیره و اعمال" else "Save & Apply", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (isFa) "انصراف" else "Cancel", color = Color.White.copy(alpha = 0.7f))
             }
         }
     )

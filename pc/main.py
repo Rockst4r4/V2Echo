@@ -41,7 +41,14 @@ except ImportError:
     winreg = None
 
 APP_NAME = "EcholicenseVPN"
-APP_VERSION = "1.9.2"
+AI_ROUTING_DOMAINS = [
+    "openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com",
+    "anthropic.com", "claude.ai", "gemini.google.com", "generativelanguage.googleapis.com",
+    "aistudio.google.com", "perplexity.ai", "x.ai", "grok.com",
+    "binance.com", "bybit.com", "okx.com",
+]
+
+APP_VERSION = "2.0.0"
 BUILD_EPOCH = 0
 ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/Rockst4r4/V2Echo/main/announcements.json"
 SOCKS_PORT = 10808
@@ -340,6 +347,9 @@ class EcholicenseApi:
         self._state = self._load_saved_state()
         self._vpn_hist = []
         self._vpn_attempts = []
+        self._failover_streak = 0
+        self._last_failover_ts = 0.0
+        self._ensure_deeplink_protocol()
         self._state["connectionState"] = "DISCONNECTED"
         self._state["statusMessage"] = "Ready to connect"
         self._state["version"] = APP_VERSION
@@ -365,6 +375,9 @@ class EcholicenseApi:
             "killSwitch": False,
             "startupApp": False,
             "autoConnect": False,
+            "smartFailover": True,
+            "smartAiRouting": False,
+            "lastTrafficAlertDate": "",
             "iranSplit": True,
             "adBlocker": True,
             "autoMtu": True,
@@ -396,7 +409,7 @@ class EcholicenseApi:
             "language", "mode", "subscriptions", "activeSubId", "servers", "activeServerId",
             "subInfo", "aiProOnly", "gamingOnly", "killSwitch", "startupApp", "autoConnect",
             "iranSplit", "adBlocker", "autoMtu", "mtu", "manualDns", "mux",
-            "splitMode", "splitApps", "dismissedAnnouncementId", "lastNotifiedId", "botUsername",
+            "splitMode", "splitApps", "dismissedAnnouncementId", "lastNotifiedId", "botUsername", "smartFailover", "smartAiRouting", "lastTrafficAlertDate",
         ]
         payload = {k: self._state.get(k) for k in persist_keys}
         try:
@@ -1120,6 +1133,26 @@ class EcholicenseApi:
                         "qualityFa": q["fa"],
                         "qualityEn": q["en"],
                     }
+                # Smart Failover: جابه‌جایی خودکار هنگام قطعی متوالی تونل
+                if self._state.get("connectionState") == "CONNECTED" and self._state.get("smartFailover", True):
+                    if time.time() - self._connected_at >= 12.0:
+                        if (self._live_ping.get("vpnMs") or -1) <= 0:
+                            self._failover_streak += 1
+                        else:
+                            self._failover_streak = 0
+                        if self._failover_streak >= 3 and (time.time() - self._last_failover_ts) >= 45.0:
+                            nxt = self._pick_failover_server()
+                            if nxt:
+                                self._last_failover_ts = time.time()
+                                self._failover_streak = 0
+                                self._state["activeServerId"] = nxt["id"]
+                                self._state["statusMessage"] = f"Failover → {nxt.get('name', 'Server')}"
+                                self._show_windows_toast("Echolicense Smart Failover", f"Switching to {nxt.get('name', 'backup server')}...")
+                                threading.Thread(target=self.connect, daemon=True).start()
+                    else:
+                        self._failover_streak = 0
+                else:
+                    self._failover_streak = 0
             except Exception:
                 pass
             time.sleep(2.5)
@@ -1317,9 +1350,11 @@ class EcholicenseApi:
         last_sub_sync = time.time()
         last_notif_sync = time.time()
         last_upd_sync = time.time()
+        self._check_traffic_alert()
         while True:
-            time.sleep(5)
+            time.sleep(2)
             now = time.time()
+            self._poll_pending_deeplink()
             if now - last_notif_sync >= 20:
                 last_notif_sync = now
                 self._fetch_announcement()
@@ -1532,80 +1567,6 @@ class EcholicenseApi:
 
         raise RuntimeError("Unable to reach subscription server")
 
-    def _fetch_sub_text_and_headers(self, url: str) -> tuple[str, dict]:
-        from urllib.parse import urlparse, urlunparse, quote
-        parsed = urlparse(url.strip())
-        host = parsed.hostname or ""
-        base_headers = dict(get_device_headers())
-        base_headers.setdefault("User-Agent", "v2rayNG/1.9.15")
-        base_headers["Accept"] = "*/*"
-        base_headers["Cache-Control"] = "no-cache"
-
-        # 1. تلاش استاندارد روی IPv4 (بدون پروکسی معلق)
-        for no_proxy in (False, True):
-            try:
-                kw = {"headers": base_headers, "timeout": 14, "allow_redirects": True}
-                if no_proxy:
-                    kw["proxies"] = {"http": "", "https": ""}
-                r = requests.get(url.strip(), **kw)
-                r.raise_for_status()
-                if r.text and r.text.strip():
-                    return r.text, dict(r.headers)
-            except Exception:
-                pass
-
-        # 2. دور زدن DNS مودم (مخابرات/فیبر نوری) از طریق DoH مستقیم به 1.1.1.1 و 8.8.8.8
-        if host and not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
-            for doh_url in (
-                f"https://1.1.1.1/dns-query?name={quote(host)}&type=A",
-                f"https://8.8.8.8/resolve?name={quote(host)}&type=A",
-            ):
-                try:
-                    dr = requests.get(
-                        doh_url,
-                        headers={"Accept": "application/dns-json", "User-Agent": "Mozilla/5.0"},
-                        proxies={"http": "", "https": ""},
-                        timeout=6,
-                    )
-                    ans = dr.json().get("Answer") or []
-                    ips = [a["data"].strip() for a in ans if a.get("type") == 1 and a.get("data")]
-                    for ip in ips:
-                        try:
-                            netloc = ip if not parsed.port else f"{ip}:{parsed.port}"
-                            ip_url = urlunparse(parsed._replace(netloc=netloc))
-                            h2 = dict(base_headers)
-                            h2["Host"] = host
-                            r = requests.get(
-                                ip_url,
-                                headers=h2,
-                                proxies={"http": "", "https": ""},
-                                verify=False,
-                                timeout=14,
-                                allow_redirects=True,
-                            )
-                            r.raise_for_status()
-                            if r.text and r.text.strip():
-                                return r.text, dict(r.headers)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-        # 3. اگر VPN روی سیستم متصل است، دریافت از طریق پروکسی محلی
-        if self._state.get("connectionState") == "CONNECTED" and self._active_port:
-            px = f"http://127.0.0.1:{self._active_port}"
-            r = requests.get(
-                url.strip(),
-                headers=base_headers,
-                proxies={"http": px, "https": px},
-                timeout=16,
-                allow_redirects=True,
-            )
-            r.raise_for_status()
-            return r.text, dict(r.headers)
-
-        raise RuntimeError("Unable to reach subscription server")
-
     def _sync_sub_url(self, url: str) -> dict:
         body_text, resp_headers = self._fetch_sub_text_and_headers(url)
         hdr = resp_headers.get("Subscription-Userinfo") or resp_headers.get("subscription-userinfo") or ""
@@ -1619,6 +1580,7 @@ class EcholicenseApi:
             self._state["activeServerId"] = servers[0]["id"]
         self._state["statusMessage"] = f"{len(servers)} servers ready"
         self._save_state()
+        self._check_traffic_alert()
         return self.get_state()
 
     def _cleanup_on_exit(self):
@@ -1700,7 +1662,8 @@ class EcholicenseApi:
             self._apply_killswitch_rules(srv["host"])
 
         # اجرای WireGuard روی درایور کرنل بومی برای پینگ واقعی ICMP در CMD (بدون <1ms فیک)
-        if mode == "tun" and srv.get("protocol", "").upper() == "WIREGUARD":
+        ai_route_srv = self._find_ai_routing_server(srv)
+        if mode == "tun" and srv.get("protocol", "").upper() == "WIREGUARD" and not self._state.get("splitApps") and not ai_route_srv:
             if self._start_native_wg(srv, dns_addr, mtu):
                 self._add_direct_probe_route()
                 self._set_windows_proxy(False)
@@ -1745,6 +1708,43 @@ class EcholicenseApi:
                 if isinstance(cfg.get("route"), dict):
                     rules = cfg["route"].setdefault("rules", [])
                     rules.insert(0, {"ip_cidr": ["1.0.0.1/32"], "outbound": "direct"})
+            if ai_route_srv and isinstance(cfg, dict):
+                try:
+                    ai_cfg = build_singbox_config(
+                        profile=ai_route_srv,
+                        mode="proxy",
+                        dns_server=dns_addr,
+                        mtu=mtu,
+                        iran_split=False,
+                        adblock=False,
+                        mux_cfg={},
+                        split_mode="bypass",
+                        split_apps=[],
+                        socks_port=find_free_port(self._active_port + 1),
+                        tun_stack="system",
+                        app_dir=str(get_app_dir()),
+                    )
+                    ai_out = None
+                    for ob in (ai_cfg.get("outbounds") or []):
+                        if isinstance(ob, dict) and ob.get("tag") == "proxy":
+                            ai_out = dict(ob)
+                            break
+                    if ai_out:
+                        ai_out["tag"] = "ai-proxy"
+                        cfg.setdefault("outbounds", []).append(ai_out)
+                        if isinstance(cfg.get("route"), dict):
+                            rules = cfg["route"].setdefault("rules", [])
+                            ins_idx = 0
+                            for idx_r, r_item in enumerate(rules):
+                                if isinstance(r_item, dict) and (
+                                    r_item.get("protocol") == "dns"
+                                    or r_item.get("action") in ("sniff", "hijack-dns")
+                                    or r_item.get("ip_cidr") == ["1.0.0.1/32"]
+                                ):
+                                    ins_idx = idx_r + 1
+                            rules.insert(ins_idx, {"domain_suffix": AI_ROUTING_DOMAINS, "outbound": "ai-proxy"})
+                except Exception:
+                    pass
             cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
             if self._log_fh:
@@ -2027,7 +2027,7 @@ class EcholicenseApi:
         self._state.update(patch)
         self._save_state()
         if self._state["connectionState"] == "CONNECTED" and any(
-            k in patch for k in ("iranSplit", "adBlocker", "mtu", "autoMtu", "manualDns", "mux", "splitMode", "splitApps")
+            k in patch for k in ("iranSplit", "adBlocker", "mtu", "autoMtu", "manualDns", "mux", "splitMode", "splitApps", "smartAiRouting")
         ):
             return self.connect()
         return self.get_state()
@@ -2199,15 +2199,209 @@ class EcholicenseApi:
                 pass
         threading.Thread(target=self.quit_app, daemon=True).start()
 
+    def _ensure_deeplink_protocol(self):
+        if os.name != "nt" or not getattr(sys, "frozen", False):
+            return
+        try:
+            import winreg
+            exe = sys.executable
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\echolicense") as k:
+                winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "URL:Echolicense Protocol")
+                winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\echolicense\shell\open\command") as k:
+                winreg.SetValueEx(k, "", 0, winreg.REG_SZ, f'"{exe}" "%1"')
+        except Exception:
+            pass
+
+    def handle_deeplink(self, uri: str) -> dict:
+        from urllib.parse import urlparse, parse_qs, unquote
+        try:
+            u = urlparse((uri or "").strip())
+            if u.scheme.lower() != "echolicense":
+                return self.get_state()
+            qs = parse_qs(u.query)
+            raw = (qs.get("url") or qs.get("sub") or qs.get("config") or [""])[0]
+            if not raw and u.fragment and ("://" in u.fragment):
+                raw = u.fragment
+            raw = unquote(raw).strip()
+            name = unquote((qs.get("name") or ["Telegram Plan"])[0]).strip() or "Telegram Plan"
+            if raw:
+                self.add_subscription(name, raw)
+                self._show_windows_toast("Echolicense VPN", f"Subscription imported: {name}")
+                self.show_window()
+        except Exception:
+            pass
+        return self.get_state()
+
+    def _poll_pending_deeplink(self):
+        import tempfile
+        f = Path(tempfile.gettempdir()) / "echolicense_pending_deeplink.txt"
+        if f.exists():
+            try:
+                uri = f.read_text(encoding="utf-8").strip()
+                f.unlink(missing_ok=True)
+                if uri:
+                    self.handle_deeplink(uri)
+            except Exception:
+                pass
+
+    def _check_traffic_alert(self):
+        try:
+            from datetime import date
+            info = self._state.get("subInfo") or {}
+            if not info.get("hasInfo"):
+                return
+            today = date.today().isoformat()
+            if self._state.get("lastTrafficAlertDate") == today:
+                return
+            total = int(info.get("total") or 0)
+            used = int(info.get("upload") or 0) + int(info.get("download") or 0)
+            expire = int(info.get("expire") or 0)
+            low_gb = total > 0 and ((total - used) < 5 * 1024**3 or (total - used) / max(1, total) < 0.10)
+            rem_days = None
+            if expire > 0:
+                diff = expire - int(time.time())
+                rem_days = 0 if diff <= 0 else (diff // 86400) + 1
+            low_days = rem_days is not None and rem_days <= 3
+            if low_gb or low_days:
+                self._state["lastTrafficAlertDate"] = today
+                self._save_state()
+                parts = []
+                if low_gb:
+                    rem_g = max(0.0, (total - used) / (1024**3))
+                    parts.append(f"{rem_g:.1f} GB left")
+                if low_days:
+                    parts.append(f"{rem_days} day(s) left")
+                self._show_windows_toast(
+                    "Echolicense Subscription Reminder",
+                    " • ".join(parts) + " — Renew in @echopress_bot",
+                )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_ai_server(srv: dict) -> bool:
+        nm = (srv.get("name") or "").lower()
+        return any(k in nm for k in ("ai pro", "aipro", "ai-pro", "ai_pro")) or bool(re.search(r"(^|[\s\-_\[\]()|])ai([\s\-_\[\]()|]|$)", nm))
+
+    @staticmethod
+    def _is_game_server(srv: dict) -> bool:
+        nm = (srv.get("name") or "").lower()
+        return srv.get("protocol", "").upper() == "WIREGUARD" and any(k in nm for k in ("gaming", "game", "گیم"))
+
+    def _find_ai_routing_server(self, active_srv: dict):
+        if not self._state.get("smartAiRouting", False):
+            return None
+        if self._is_ai_server(active_srv):
+            return None
+        for cand in self._state.get("servers") or []:
+            if cand.get("id") == active_srv.get("id"):
+                continue
+            nm = (cand.get("name") or "").lower()
+            if self._is_ai_server(cand) or any(k in nm for k in ("us", "usa", "america", "آمریکا")):
+                return cand
+        return None
+
+    def _pick_failover_server(self):
+        srvs = self._state.get("servers") or []
+        act_id = self._state.get("activeServerId")
+        if self._state.get("gamingOnly"):
+            pool = [s for s in srvs if self._is_game_server(s)] or srvs
+        elif self._state.get("aiProOnly"):
+            pool = [s for s in srvs if self._is_ai_server(s)] or srvs
+        else:
+            pool = srvs
+        pool = [s for s in pool if s.get("id") != act_id]
+        if not pool:
+            return None
+        good = [s for s in pool if isinstance(s.get("pingMs"), int) and s["pingMs"] > 0]
+        if good:
+            good.sort(key=lambda x: x["pingMs"])
+            return good[0]
+        return pool[0]
+
+    def run_health_check(self) -> dict:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"}
+        via_vpn = self._state.get("connectionState") == "CONNECTED"
+        proxies = None
+        if via_vpn and self._state.get("mode") == "proxy" and self._active_port:
+            px = f"http://127.0.0.1:{self._active_port}"
+            proxies = {"http": px, "https": px}
+        ip, loc, isp = "--", "--", "--"
+        for url in ("https://ipwho.is/", "https://get.geojs.io/v1/ip/geo.json"):
+            try:
+                r = requests.get(url, headers=headers, proxies=proxies, timeout=7)
+                if r.ok:
+                    j = r.json()
+                    if "ipwho" in url and not j.get("success", True):
+                        continue
+                    ip = j.get("ip") or "--"
+                    loc = ", ".join(x for x in (j.get("city"), j.get("country")) if x) or "--"
+                    conn = j.get("connection") or {}
+                    isp = conn.get("isp") or conn.get("org") or j.get("organization_name") or "--"
+                    break
+            except Exception:
+                pass
+        services = []
+        for name, url in (
+            ("ChatGPT", "https://chatgpt.com/robots.txt"),
+            ("Gemini", "https://gemini.google.com/"),
+            ("Claude", "https://claude.ai/robots.txt"),
+        ):
+            t0 = time.time()
+            try:
+                r = requests.get(url, headers=headers, proxies=proxies, timeout=7)
+                ms = int((time.time() - t0) * 1000)
+                if 200 <= r.status_code < 400:
+                    services.append({"name": name, "status": "OK", "detail": f"{ms}ms"})
+                elif r.status_code in (403, 429):
+                    services.append({"name": name, "status": "WARN", "detail": f"HTTP {r.status_code} ({ms}ms)"})
+                else:
+                    services.append({"name": name, "status": "FAIL", "detail": f"HTTP {r.status_code}"})
+            except Exception as exc:
+                services.append({"name": name, "status": "FAIL", "detail": type(exc).__name__[:16]})
+        return {"ip": ip, "location": loc, "isp": isp, "viaVpn": via_vpn, "services": services}
+
+    def get_diagnostics_report(self) -> str:
+        srv = self._get_active_server() or {}
+        lp = self._live_ping or {}
+        lines = [
+            "=== Echolicense PC Diagnostic Report ===",
+            f"App: Windows v{APP_VERSION} | Mode: {self._state.get('mode')}",
+            f"State: {self._state.get('connectionState')} | Status: {self._state.get('statusMessage')}",
+            f"Server: {srv.get('name', 'None')} ({srv.get('protocol', '-')})",
+            f"DNS: {self._state.get('activeDns')} | Manual: {self._state.get('manualDns') or '-'} | MTU: {self._state.get('mtu')} (Auto={self._state.get('autoMtu')})",
+            f"Direct Ping: {lp.get('directMs')}ms (J={lp.get('directJitter')}ms) | VPN Ping: {lp.get('vpnMs')}ms (J={lp.get('vpnJitter')}ms, Loss={lp.get('packetLossPct')}%)",
+            f"Flags: IranSplit={self._state.get('iranSplit')}, AdBlock={self._state.get('adBlocker')}, KillSwitch={self._state.get('killSwitch')}, Failover={self._state.get('smartFailover')}, AiRoute={self._state.get('smartAiRouting')}",
+            f"SplitApps: {self._state.get('splitMode')} ({len(self._state.get('splitApps') or [])}) | Servers: {len(self._state.get('servers') or [])}",
+        ]
+        return "\n".join(lines)
+
     def open_url(self, url: str):
         webbrowser.open(url)
 
 
 def main():
+    import tempfile
+    deeplink_arg = next((a for a in sys.argv[1:] if a.lower().startswith("echolicense://")), None)
+    _instance_mutex = None
+    if os.name == "nt":
+        try:
+            import ctypes
+            _instance_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\EcholicenseVPN_SingleInstance_v2")
+            if ctypes.windll.kernel32.GetLastError() == 183:
+                if deeplink_arg:
+                    (Path(tempfile.gettempdir()) / "echolicense_pending_deeplink.txt").write_text(deeplink_arg, encoding="utf-8")
+                return
+        except Exception:
+            pass
+
     api = EcholicenseApi()
+    if deeplink_arg:
+        threading.Timer(1.2, api.handle_deeplink, args=(deeplink_arg,)).start()
     index_html = str(get_resource_dir() / "ui" / "index.html")
     win = webview.create_window(
-        title="Echolicense VPN v1.9.2",
+        title="Echolicense VPN v2.0.0",
         url=index_html,
         js_api=api,
         width=445,
