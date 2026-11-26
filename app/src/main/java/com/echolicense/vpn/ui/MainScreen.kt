@@ -821,7 +821,8 @@ private fun MultiSubscriptionDialog(
     onScanQr: () -> Unit,
     onAddNew: (String, String) -> Unit,
     onSwitch: (SubscriptionItem) -> Unit,
-    onDelete: (SubscriptionItem) -> Unit
+    onDelete: (SubscriptionItem) -> Unit,
+    onRefresh: () -> Unit
 ) {
     var nameInput by remember { mutableStateOf("") }
     var urlInput by remember { mutableStateOf("") }
