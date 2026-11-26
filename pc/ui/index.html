@@ -488,10 +488,10 @@ body.connected .win-dot {
     </div>
     <div id="macPrivacyGuardBox" style="display:none;margin:10px 0;padding:11px;border-radius:14px;background:rgba(168,85,247,0.10);border:1px solid rgba(168,85,247,0.34)">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <strong style="font-size:12px;color:#E9D5FF">🛡️ Location &amp; Privacy Guard (macOS)</strong>
+        <strong id="macGuardTitle" style="font-size:12px;color:#E9D5FF">🛡️ Location &amp; Privacy Guard</strong>
         <span id="macGuardBadge" style="font-size:10px;padding:2px 7px;border-radius:99px;background:rgba(0,229,163,0.16);color:#00E5A3">QUIC + DNS OK</span>
       </div>
-      <div id="macTzInfo" style="font-size:11px;color:var(--muted);line-height:1.55;margin-bottom:8px">Checking macOS timezone...</div>
+      <div id="macTzInfo" style="font-size:11px;color:var(--muted);line-height:1.55;margin-bottom:8px">Checking system timezone...</div>
       <div class="setting-row" style="padding:4px 0">
         <span style="font-size:11.5px">Auto-Sync Timezone in AI Pro</span>
         <label class="switch"><input type="checkbox" id="setAutoTzSync" onchange="toggleMacAutoTz()"><span class="slider"></span></label>
@@ -500,7 +500,7 @@ body.connected .win-dot {
         <button class="btn btn-outline" style="flex:1;padding:6px 8px;font-size:11px" onclick="syncMacTzNow()">Sync Timezone</button>
         <button class="btn btn-outline" style="flex:1;padding:6px 8px;font-size:11px" onclick="restoreMacTzNow()">Restore TZ</button>
       </div>
-      <button class="btn btn-outline" style="width:100%;margin-top:6px;padding:6px 8px;font-size:11px;border-color:rgba(34,228,255,0.35);color:#22E4FF" onclick="openMacLocationPrefs()">Open macOS Location Services</button>
+      <button class="btn btn-outline" style="width:100%;margin-top:6px;padding:6px 8px;font-size:11px;border-color:rgba(34,228,255,0.35);color:#22E4FF" id="macLocBtn" onclick="openMacLocationPrefs()">Open Location Settings</button>
     </div>
     <div class="setting-row">
       <span>AdBlocker (Ads & YouTube)</span>
@@ -890,10 +890,17 @@ async function refreshMacPrivacyGuard() {
       return;
     }
     box.style.display = 'block';
-    const startupRow = document.getElementById('setStartup');
-    if (startupRow && startupRow.closest('.setting-row')) {
-      const sp = startupRow.closest('.setting-row').querySelector('span');
-      if (sp && sp.textContent.includes('Windows')) sp.textContent = 'Start with macOS (Login Item)';
+    const isMac = g.platform === 'macos';
+    const titleEl = document.getElementById('macGuardTitle');
+    if (titleEl) titleEl.textContent = isMac ? '🛡️ Location & Privacy Guard (macOS)' : '🛡️ Location & Privacy Guard (Windows)';
+    const locBtn = document.getElementById('macLocBtn');
+    if (locBtn) locBtn.textContent = isMac ? 'Open macOS Location Services' : 'Open Windows Location Settings';
+    if (isMac) {
+      const startupRow = document.getElementById('setStartup');
+      if (startupRow && startupRow.closest('.setting-row')) {
+        const sp = startupRow.closest('.setting-row').querySelector('span');
+        if (sp && sp.textContent.includes('Windows')) sp.textContent = 'Start with macOS (Login Item)';
+      }
     }
     const cb = document.getElementById('setAutoTzSync');
     if (cb) cb.checked = !!g.autoTzSync;

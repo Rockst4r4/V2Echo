@@ -36,6 +36,20 @@ except ImportError:
 from singbox_config import build_singbox_config
 
 IS_MACOS = sys.platform == "darwin"
+
+WIN_TIMEZONE_MAP = [
+    (r"🇺🇸|united states|\busa?\b|america|آمریکا|امریکا|aws|amazon|ashburn|new york|ai[\s\-_]*pro", "Eastern Standard Time"),
+    (r"🇩🇪|germany|frankfurt|آلمان|\bde\b", "W. Europe Standard Time"),
+    (r"🇳🇱|netherlands|amsterdam|هلند|\bnl\b", "W. Europe Standard Time"),
+    (r"🇫🇮|finland|helsinki|فنلاند|\bfi\b", "FLE Standard Time"),
+    (r"🇬🇧|united kingdom|london|انگلیس|\buk\b|\bgb\b", "GMT Standard Time"),
+    (r"🇫🇷|france|paris|فرانسه|\bfr\b", "Romance Standard Time"),
+    (r"🇹🇷|turkey|istanbul|ترکیه|\btr\b", "Turkey Standard Time"),
+    (r"🇦🇪|uae|dubai|امارات|دبی|\bae\b", "Arabian Standard Time"),
+    (r"🇨🇦|canada|toronto|کانادا|\bca\b", "Eastern Standard Time"),
+    (r"🇸🇬|singapore|سنگاپور|\bsg\b", "Singapore Standard Time"),
+]
+
 try:
     import macos_support
 except Exception:
@@ -1730,6 +1744,7 @@ class EcholicenseApi:
             if self._start_native_wg(srv, dns_addr, mtu):
                 self._add_direct_probe_route()
                 self._set_windows_proxy(False)
+                self._maybe_auto_sync_tz(srv)
                 self._connected_at = time.time()
                 self._state["connectionState"] = "CONNECTED"
                 self._state["statusMessage"] = f"Connected • WireGuard Kernel TUN (Real Ping) • MTU {mtu}"
@@ -1854,12 +1869,7 @@ class EcholicenseApi:
         else:
             self._set_windows_proxy(False)
 
-        if IS_MACOS and macos_support and self._state.get("autoTzSync") and (self._is_ai_server(srv) or self._state.get("smartAiRouting")):
-            threading.Thread(
-                target=macos_support.sync_timezone_for_server,
-                args=(srv.get("name", ""), bool(self._state.get("smartAiRouting"))),
-                daemon=True,
-            ).start()
+        self._maybe_auto_sync_tz(srv)
         self._connected_at = time.time()
         self._state["connectionState"] = "CONNECTED"
         mode_lbl = "TUN (Real Ping)" if mode == "tun" else "System Proxy"
@@ -1874,8 +1884,8 @@ class EcholicenseApi:
         if IS_MACOS and macos_support and getattr(self, "_mac_tun_active", False):
             macos_support.stop_singbox_tun_macos(str(self._data_dir / "singbox_tun.pid"))
             self._mac_tun_active = False
-        if IS_MACOS and macos_support and (not keep_killswitch) and self._state.get("autoTzSync"):
-            threading.Thread(target=macos_support.restore_original_timezone, daemon=True).start()
+        if not keep_killswitch:
+            self._maybe_auto_restore_tz()
         if self._proc:
             try:
                 self._proc.terminate()
@@ -2413,41 +2423,193 @@ class EcholicenseApi:
             return good[0]
         return pool[0]
 
+    def _win_tz_backup_file(self) -> Path:
+        return self._data_dir / "tz_backup.json"
+
+    def _win_get_timezone(self) -> str:
+        if os.name != "nt":
+            return ""
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            out = subprocess.check_output(["tzutil", "/g"], text=True, timeout=5, creationflags=flags)
+            return out.strip() or "Unknown"
+        except Exception:
+            return "Unknown"
+
+    def _win_expected_timezone(self, server_name: str, smart_ai_enabled: bool = False) -> str:
+        low = (server_name or "").lower()
+        for pattern, tz_id in WIN_TIMEZONE_MAP:
+            if re.search(pattern, low, re.I):
+                return tz_id
+        return "Eastern Standard Time"
+
+    def _win_load_tz_backup(self) -> str:
+        try:
+            bf = self._win_tz_backup_file()
+            if bf.exists():
+                return str(json.loads(bf.read_text(encoding="utf-8")).get("original_timezone") or "")
+        except Exception:
+            pass
+        return ""
+
+    def _win_save_tz_backup(self, tz_id: str) -> None:
+        try:
+            bf = self._win_tz_backup_file()
+            bf.parent.mkdir(parents=True, exist_ok=True)
+            bf.write_text(json.dumps({"original_timezone": tz_id}), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _win_sync_timezone(self, server_name: str, smart_ai_enabled: bool = False) -> dict:
+        if os.name != "nt":
+            return {"ok": False, "error": "Windows only"}
+        cur_tz = self._win_get_timezone()
+        target_tz = self._win_expected_timezone(server_name, smart_ai_enabled)
+        if cur_tz == target_tz:
+            return {"ok": True, "timezone": target_tz, "changed": False}
+        if not self._win_load_tz_backup() and cur_tz and cur_tz != "Unknown":
+            self._win_save_tz_backup(cur_tz)
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            res = subprocess.run(
+                ["tzutil", "/s", target_tz],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                creationflags=flags,
+            )
+            ok = res.returncode == 0
+            err = "" if ok else ((res.stderr or res.stdout or "Run as Administrator").strip())
+            return {"ok": ok, "timezone": target_tz if ok else cur_tz, "error": err}
+        except Exception as exc:
+            return {"ok": False, "timezone": cur_tz, "error": str(exc)}
+
+    def _win_restore_timezone(self) -> dict:
+        if os.name != "nt":
+            return {"ok": False, "error": "Windows only"}
+        orig = self._win_load_tz_backup()
+        if not orig:
+            return {"ok": True, "restored": False, "timezone": self._win_get_timezone()}
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            res = subprocess.run(
+                ["tzutil", "/s", orig],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                creationflags=flags,
+            )
+            ok = res.returncode == 0
+            if ok:
+                try:
+                    self._win_tz_backup_file().unlink(missing_ok=True)
+                except Exception:
+                    pass
+            err = "" if ok else ((res.stderr or res.stdout or "Failed to restore timezone").strip())
+            return {"ok": ok, "restored": ok, "timezone": orig if ok else self._win_get_timezone(), "error": err}
+        except Exception as exc:
+            return {"ok": False, "restored": False, "timezone": self._win_get_timezone(), "error": str(exc)}
+
+    def _win_open_location_settings(self) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            os.startfile("ms-settings:privacy-location")
+            return True
+        except Exception:
+            try:
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                subprocess.Popen(["cmd", "/c", "start", "", "ms-settings:privacy-location"], creationflags=flags)
+                return True
+            except Exception:
+                return False
+
+    def _maybe_auto_sync_tz(self, srv: dict) -> None:
+        if not self._state.get("autoTzSync"):
+            return
+        if not (self._is_ai_server(srv) or self._state.get("smartAiRouting")):
+            return
+        srv_name = srv.get("name", "")
+        smart_ai = bool(self._state.get("smartAiRouting"))
+        if IS_MACOS and macos_support:
+            threading.Thread(
+                target=macos_support.sync_timezone_for_server,
+                args=(srv_name, smart_ai),
+                daemon=True,
+            ).start()
+        elif os.name == "nt":
+            threading.Thread(
+                target=self._win_sync_timezone,
+                args=(srv_name, smart_ai),
+                daemon=True,
+            ).start()
+
+    def _maybe_auto_restore_tz(self) -> None:
+        if not self._state.get("autoTzSync"):
+            return
+        if IS_MACOS and macos_support:
+            threading.Thread(target=macos_support.restore_original_timezone, daemon=True).start()
+        elif os.name == "nt":
+            threading.Thread(target=self._win_restore_timezone, daemon=True).start()
+
     def get_privacy_guard(self) -> dict:
-        if not (IS_MACOS and macos_support):
-            return {"supported": False}
         srv = self._get_active_server() or {}
         is_conn = self._state.get("connectionState") == "CONNECTED"
-        st = macos_support.get_privacy_guard_status(
-            srv.get("name", ""),
-            is_conn,
-            bool(self._state.get("smartAiRouting", False)),
-        )
-        st["autoTzSync"] = bool(self._state.get("autoTzSync", False))
-        return st
+        smart_ai = bool(self._state.get("smartAiRouting", False))
+        if IS_MACOS and macos_support:
+            st = macos_support.get_privacy_guard_status(srv.get("name", ""), is_conn, smart_ai)
+            st["platform"] = "macos"
+            st["autoTzSync"] = bool(self._state.get("autoTzSync", False))
+            return st
+        if os.name == "nt":
+            sys_tz = self._win_get_timezone()
+            rec_tz = self._win_expected_timezone(srv.get("name", ""), smart_ai)
+            orig_tz = self._win_load_tz_backup()
+            low_tz = sys_tz.lower()
+            is_iran_tz = ("iran" in low_tz) or ("tehran" in low_tz)
+            mismatch = bool(is_conn and (is_iran_tz or (sys_tz and sys_tz != "Unknown" and sys_tz != rec_tz)))
+            return {
+                "supported": True,
+                "platform": "windows",
+                "systemTimezone": sys_tz,
+                "recommendedTimezone": rec_tz,
+                "timezoneMismatch": mismatch,
+                "timezoneOverridden": bool(orig_tz),
+                "originalTimezone": orig_tz,
+                "quicGuard": True,
+                "dnsLeakGuard": True,
+                "autoTzSync": bool(self._state.get("autoTzSync", False)),
+            }
+        return {"supported": False}
 
     def sync_macos_timezone(self) -> dict:
-        if not (IS_MACOS and macos_support):
-            return {"ok": False, "error": "macOS only"}
         srv = self._get_active_server() or {}
-        res = macos_support.sync_timezone_for_server(
-            srv.get("name", ""),
-            bool(self._state.get("smartAiRouting", False)),
-        )
+        smart_ai = bool(self._state.get("smartAiRouting", False))
+        if IS_MACOS and macos_support:
+            res = macos_support.sync_timezone_for_server(srv.get("name", ""), smart_ai)
+        elif os.name == "nt":
+            res = self._win_sync_timezone(srv.get("name", ""), smart_ai)
+        else:
+            return {"ok": False, "error": "Unsupported platform"}
         res["guard"] = self.get_privacy_guard()
         return res
 
     def restore_macos_timezone(self) -> dict:
-        if not (IS_MACOS and macos_support):
-            return {"ok": False, "error": "macOS only"}
-        res = macos_support.restore_original_timezone()
+        if IS_MACOS and macos_support:
+            res = macos_support.restore_original_timezone()
+        elif os.name == "nt":
+            res = self._win_restore_timezone()
+        else:
+            return {"ok": False, "error": "Unsupported platform"}
         res["guard"] = self.get_privacy_guard()
         return res
 
     def open_macos_location_settings(self) -> dict:
-        if not (IS_MACOS and macos_support):
-            return {"ok": False}
-        return {"ok": macos_support.open_macos_location_settings()}
+        if IS_MACOS and macos_support:
+            return {"ok": macos_support.open_macos_location_settings()}
+        if os.name == "nt":
+            return {"ok": self._win_open_location_settings()}
+        return {"ok": False}
 
     def open_url(self, url: str):
         webbrowser.open(url)
