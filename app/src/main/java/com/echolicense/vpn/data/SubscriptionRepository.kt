@@ -272,6 +272,7 @@ class SubscriptionRepository {
                 line.startsWith("trojan://", true) -> parseUriProfile(line, VpnProtocol.TROJAN)?.let(result::add)
                 line.startsWith("vmess://", true) -> parseVmessProfile(line)?.let(result::add)
                 line.startsWith("wireguard://", true) -> parseWireGuardUri(line)?.let(result::add)
+                line.startsWith("ss://", true) -> parseShadowsocksProfile(line)?.let(result::add)
             }
         }
         return result
@@ -317,6 +318,62 @@ class SubscriptionRepository {
                 rawConfig = line,
                 host = json.optString("add"),
                 port = json.optInt("port", 443)
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun decodeBase64Flexible(raw: String): String {
+        val cleaned = (safeDecode(raw) ?: raw)
+            .replace("-", "+")
+            .replace("_", "/")
+            .replace("\n", "")
+            .replace("\r", "")
+            .trim()
+        val padLen = (4 - cleaned.length % 4) % 4
+        val padded = cleaned + "=".repeat(padLen)
+        return String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
+    }
+
+    private fun parseShadowsocksProfile(line: String): ServerProfile? {
+        return try {
+            val (base, frag) = splitFragment(line)
+            val afterScheme = base.substringAfter("://", "").trim()
+            val body = afterScheme.substringBefore("?").trimEnd('/')
+            if (body.isBlank()) return null
+
+            val creds: String
+            val hostPortRaw: String
+            val atIdx = body.lastIndexOf('@')
+            if (atIdx > 0) {
+                val userInfo = body.substring(0, atIdx)
+                hostPortRaw = body.substring(atIdx + 1).trimEnd('/')
+                val unq = safeDecode(userInfo) ?: userInfo
+                creds = if (unq.contains(":")) unq else decodeBase64Flexible(userInfo)
+            } else {
+                val decoded = decodeBase64Flexible(body)
+                val decAt = decoded.lastIndexOf('@')
+                if (decAt <= 0) return null
+                creds = decoded.substring(0, decAt)
+                hostPortRaw = decoded.substring(decAt + 1).trimEnd('/')
+            }
+
+            if (!creds.contains(":")) return null
+            val method = creds.substringBefore(":").trim()
+            if (method.isBlank()) return null
+
+            val (host, port) = parseEndpointHostPort(hostPortRaw)
+            if (host.isBlank()) return null
+
+            val name = safeDecode(frag)?.ifBlank { null } ?: "Shadowsocks ($host)"
+            ServerProfile(
+                id = UUID.randomUUID().toString(),
+                name = name,
+                protocol = VpnProtocol.SHADOWSOCKS,
+                rawConfig = line,
+                host = host,
+                port = if (port > 0) port else 8388
             )
         } catch (_: Exception) {
             null

@@ -70,6 +70,52 @@ def _parse_reserved(raw: str):
     return None
 
 
+def _parse_ss_uri(raw: str, fallback_host: str, fallback_port: int) -> tuple[str, str, str, int, str, str]:
+    base = raw.split("#", 1)[0].strip()
+    body = base.split("://", 1)[1].strip()
+    query_str = ""
+    if "?" in body:
+        body, query_str = body.split("?", 1)
+    body = body.rstrip("/")
+
+    def _b64(val: str) -> str:
+        c = unquote(val.strip()).replace("-", "+").replace("_", "/")
+        c = "".join(c.split())
+        pad = "=" * ((4 - len(c) % 4) % 4)
+        return base64.b64decode(c + pad).decode("utf-8")
+
+    if "@" in body:
+        userinfo, host_port = body.rsplit("@", 1)
+        ui_unquoted = unquote(userinfo)
+        creds = ui_unquoted if ":" in ui_unquoted else _b64(userinfo)
+    else:
+        decoded = _b64(body)
+        creds, host_port = decoded.rsplit("@", 1)
+
+    method, password = creds.split(":", 1)
+    host_port = host_port.rstrip("/")
+    host, port = fallback_host, int(fallback_port)
+    if host_port.startswith("[") and "]:" in host_port:
+        host, p_str = host_port[1:].split("]:", 1)
+        port = int(p_str)
+    elif ":" in host_port:
+        host, p_str = host_port.rsplit(":", 1)
+        port = int(p_str)
+    elif host_port:
+        host = host_port
+
+    plugin_name, plugin_opts = "", ""
+    if query_str:
+        params = {k.lower(): unquote(v[0]) for k, v in parse_qs(query_str).items() if v}
+        plugin_raw = params.get("plugin", "").strip()
+        if plugin_raw:
+            parts = plugin_raw.split(";", 1)
+            plugin_name = parts[0].strip()
+            plugin_opts = parts[1].strip() if len(parts) > 1 else ""
+
+    return method.strip(), password, host, port, plugin_name, plugin_opts
+
+
 def build_outbound(profile: dict, mtu: int, mux_cfg: dict) -> dict:
     proto = profile["protocol"].upper()
     raw = profile["rawConfig"]
@@ -131,6 +177,24 @@ def build_outbound(profile: dict, mtu: int, mux_cfg: dict) -> dict:
         res_bytes = _parse_reserved(reserved_raw)
         if res_bytes:
             out["reserved"] = res_bytes
+        return out
+
+    if proto == "SHADOWSOCKS":
+        method, password, host, port, plugin_name, plugin_opts = _parse_ss_uri(
+            raw, profile["host"], int(profile["port"])
+        )
+        out = {
+            "type": "shadowsocks",
+            "tag": "proxy",
+            "server": host,
+            "server_port": port,
+            "method": method,
+            "password": password,
+        }
+        if plugin_name:
+            out["plugin"] = plugin_name
+            if plugin_opts:
+                out["plugin_opts"] = plugin_opts
         return out
 
     if proto == "VMESS":

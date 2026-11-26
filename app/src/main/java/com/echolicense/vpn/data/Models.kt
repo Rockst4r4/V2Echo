@@ -1,6 +1,6 @@
 package com.echolicense.vpn.data
 
-enum class VpnProtocol { VLESS, VMESS, TROJAN, WIREGUARD }
+enum class VpnProtocol { VLESS, VMESS, TROJAN, WIREGUARD, SHADOWSOCKS }
 
 enum class ConnectionState { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
 

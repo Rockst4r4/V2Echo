@@ -227,6 +227,61 @@ def parse_wireguard_uri(line: str) -> dict | None:
         return None
 
 
+def _b64_decode_text(raw: str) -> str:
+    s = unquote(raw.strip()).replace("-", "+").replace("_", "/")
+    s = "".join(s.split())
+    pad = "=" * ((4 - len(s) % 4) % 4)
+    return base64.b64decode(s + pad).decode("utf-8")
+
+
+def parse_shadowsocks_uri(line: str) -> dict | None:
+    try:
+        base, frag = (line.split("#", 1) + [""])[:2]
+        body = base.split("://", 1)[1].strip()
+        if "?" in body:
+            body, _query = body.split("?", 1)
+        body = body.rstrip("/")
+
+        if "@" in body:
+            userinfo, host_port = body.rsplit("@", 1)
+            ui_unquoted = unquote(userinfo)
+            if ":" in ui_unquoted:
+                creds = ui_unquoted
+            else:
+                creds = _b64_decode_text(userinfo)
+        else:
+            decoded = _b64_decode_text(body)
+            if "@" not in decoded:
+                return None
+            creds, host_port = decoded.rsplit("@", 1)
+
+        if ":" not in creds:
+            return None
+        method, password = creds.split(":", 1)
+        if not method.strip():
+            return None
+
+        host_port = host_port.rstrip("/")
+        host, port = parse_endpoint(host_port)
+        if not host:
+            return None
+
+        name = unquote(frag).strip() or f"Shadowsocks ({host})"
+        return {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "protocol": "SHADOWSOCKS",
+            "rawConfig": line,
+            "host": host,
+            "port": port or 8388,
+            "pingMs": -1,
+            "isAiPro": is_ai_pro(name),
+            "isGaming": is_gaming(name, "SHADOWSOCKS"),
+        }
+    except Exception:
+        return None
+
+
 def parse_servers(raw_text: str) -> list[dict]:
     text = raw_text.strip()
     if "[interface]" in text.lower() and "[peer]" in text.lower():
@@ -262,6 +317,10 @@ def parse_servers(raw_text: str) -> list[dict]:
         low = line.lower()
         if low.startswith("wireguard://"):
             item = parse_wireguard_uri(line)
+            if item:
+                out.append(item)
+        elif low.startswith("ss://"):
+            item = parse_shadowsocks_uri(line)
             if item:
                 out.append(item)
         elif low.startswith(("vless://", "trojan://")):

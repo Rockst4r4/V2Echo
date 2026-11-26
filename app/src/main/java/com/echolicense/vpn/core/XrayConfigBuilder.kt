@@ -187,9 +187,10 @@ object XrayConfigBuilder {
             VpnProtocol.WIREGUARD -> buildWireGuardOutbound(profile, safeMtu)
             VpnProtocol.VMESS -> buildVmessOutbound(profile)
             VpnProtocol.VLESS, VpnProtocol.TROJAN -> buildUriOutbound(profile, muxConfig.enabled)
+            VpnProtocol.SHADOWSOCKS -> buildShadowsocksOutbound(profile)
         }
 
-        if (muxConfig.enabled && profile.protocol != VpnProtocol.WIREGUARD) {
+        if (muxConfig.enabled && profile.protocol != VpnProtocol.WIREGUARD && profile.protocol != VpnProtocol.SHADOWSOCKS) {
             proxyOutbound.put(
                 "mux",
                 JSONObject()
@@ -207,6 +208,7 @@ object XrayConfigBuilder {
                 VpnProtocol.WIREGUARD -> buildWireGuardOutbound(aiFallbackProfile, safeMtu)
                 VpnProtocol.VMESS -> buildVmessOutbound(aiFallbackProfile)
                 VpnProtocol.VLESS, VpnProtocol.TROJAN -> buildUriOutbound(aiFallbackProfile, false)
+                VpnProtocol.SHADOWSOCKS -> buildShadowsocksOutbound(aiFallbackProfile)
             }
             aiOutbound.put("tag", "ai-proxy")
             outbounds.put(aiOutbound)
@@ -486,6 +488,73 @@ object XrayConfigBuilder {
                     )
                 )
             )
+    }
+
+    private fun decodeSsBase64(raw: String): String {
+        val unq = runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+        val cleaned = unq
+            .replace("-", "+")
+            .replace("_", "/")
+            .replace("\n", "")
+            .replace("\r", "")
+            .trim()
+        val padLen = (4 - cleaned.length % 4) % 4
+        return String(Base64.decode(cleaned + "=".repeat(padLen), Base64.DEFAULT), Charsets.UTF_8)
+    }
+
+    private fun parseSsHostPort(raw: String, fallbackHost: String, fallbackPort: Int): Pair<String, Int> {
+        val cleaned = raw.trim().trimEnd('/')
+        if (cleaned.startsWith("[") && cleaned.contains("]:")) {
+            val h = cleaned.substringAfter("[").substringBefore("]:")
+            val p = cleaned.substringAfter("]:").toIntOrNull() ?: fallbackPort
+            return h to p
+        }
+        val idx = cleaned.lastIndexOf(':')
+        if (idx > 0) {
+            val h = cleaned.substring(0, idx)
+            val p = cleaned.substring(idx + 1).toIntOrNull() ?: fallbackPort
+            return h to p
+        }
+        return (cleaned.ifBlank { fallbackHost }) to fallbackPort
+    }
+
+    private fun buildShadowsocksOutbound(profile: ServerProfile): JSONObject {
+        val base = profile.rawConfig.substringBefore("#").trim()
+        val body = base.substringAfter("://", "").substringBefore("?").trimEnd('/')
+
+        val creds: String
+        val hostPortRaw: String
+        val atIdx = body.lastIndexOf('@')
+        if (atIdx > 0) {
+            val userInfo = body.substring(0, atIdx)
+            hostPortRaw = body.substring(atIdx + 1)
+            val unq = runCatching { URLDecoder.decode(userInfo, "UTF-8") }.getOrDefault(userInfo)
+            creds = if (unq.contains(":")) unq else decodeSsBase64(userInfo)
+        } else {
+            val decoded = decodeSsBase64(body)
+            val decAt = decoded.lastIndexOf('@')
+            if (decAt <= 0) throw IllegalArgumentException("Invalid Shadowsocks URI")
+            creds = decoded.substring(0, decAt)
+            hostPortRaw = decoded.substring(decAt + 1)
+        }
+
+        val colonIdx = creds.indexOf(':')
+        if (colonIdx <= 0) throw IllegalArgumentException("Invalid Shadowsocks credentials")
+        val method = creds.substring(0, colonIdx).trim()
+        val password = creds.substring(colonIdx + 1)
+        val (host, port) = parseSsHostPort(hostPortRaw, profile.host, profile.port)
+
+        val serverObj = JSONObject()
+            .put("address", host)
+            .put("port", port)
+            .put("method", method)
+            .put("password", password)
+            .put("uot", false)
+
+        return JSONObject()
+            .put("tag", "proxy")
+            .put("protocol", "shadowsocks")
+            .put("settings", JSONObject().put("servers", JSONArray().put(serverObj)))
     }
 
     private fun buildUriOutbound(profile: ServerProfile, muxEnabled: Boolean): JSONObject {
