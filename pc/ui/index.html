@@ -251,6 +251,9 @@ body.connected .win-dot {
 .upd-prog-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #22E4FF, #00E5A3); transition: width 0.2s ease; }
 
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+@keyframes spinSub { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.sub-spinning { display: inline-block; animation: spinSub 0.8s linear infinite; }
 </style>
 </head>
 <body>
@@ -282,6 +285,7 @@ body.connected .win-dot {
     </div>
   </div>
   <div class="top-actions">
+    <div class="glass icon-btn click" id="topUpdateSubBtn" onclick="refreshSub(this)" title="Update Subscription"><span class="sub-ref-ico">🔄</span></div>
     <div class="glass icon-btn click" onclick="openModal('subsModal')">🔗 <span data-i18n="subs">Subs</span></div>
     <div class="glass icon-btn click" onclick="openModal('settingsModal')" title="Settings">⚙️</div>
   </div>
@@ -432,10 +436,11 @@ body.connected .win-dot {
 <div class="modal-bg" id="subsModal">
   <div class="modal">
     <h2><span>🔗 Subscriptions</span><span class="click" onclick="closeModal('subsModal')">✕</span></h2>
+    <button class="btn btn-outline" id="modalUpdateSubBtn" style="margin-bottom:10px;border-color:rgba(34,228,255,0.45);color:var(--cyan)" onclick="refreshSub(this)">🔄 Update Subscription</button>
     <div id="subsList"></div>
     <div class="divider"></div>
     <input type="text" id="newSubName" placeholder="Plan name (e.g. Main Plan)" />
-    <textarea id="newSubInput" rows="3" placeholder="Paste sub URL, vless:// or WireGuard [Interface] config..."></textarea>
+    <textarea id="newSubInput" rows="3" placeholder="Paste sub URL, vless://, ss:// or WireGuard [Interface] config..."></textarea>
     <button class="btn" onclick="addSub()">Add & Load</button>
   </div>
 </div>
@@ -789,7 +794,28 @@ async function openUpdateModal() {
 async function checkPcUpdate() { render(await pywebview.api.check_app_update(false)); }
 async function startPcUpdate() { render(await pywebview.api.start_app_update()); }
 async function pingAll() { render(await pywebview.api.ping_all()); }
-async function refreshSub() { render(await pywebview.api.refresh_subscription()); }
+let _subRefreshing = false;
+async function refreshSub(btn) {
+  if (_subRefreshing) return;
+  _subRefreshing = true;
+  const topIco = document.querySelector('#topUpdateSubBtn .sub-ref-ico');
+  const modBtn = document.getElementById('modalUpdateSubBtn');
+  if (topIco) topIco.classList.add('sub-spinning');
+  if (modBtn) {
+    modBtn.disabled = true;
+    modBtn.textContent = '⏳ Updating Subscription...';
+  }
+  try {
+    render(await pywebview.api.refresh_subscription());
+  } finally {
+    _subRefreshing = false;
+    if (topIco) topIco.classList.remove('sub-spinning');
+    if (modBtn) {
+      modBtn.disabled = false;
+      modBtn.textContent = '🔄 Update Subscription';
+    }
+  }
+}
 async function selectSrv(id) { closeModal('serversModal'); render(await pywebview.api.select_server(id)); }
 async function switchSub(id) { closeModal('subsModal'); render(await pywebview.api.switch_subscription(id)); }
 async function deleteSub(id) { render(await pywebview.api.delete_subscription(id)); }

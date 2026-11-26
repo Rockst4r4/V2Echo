@@ -2026,9 +2026,14 @@ class EcholicenseApi:
     def refresh_subscription(self) -> dict:
         sub = self._get_active_sub()
         if not sub:
+            self._state["statusMessage"] = "No active subscription to update"
+            return self.get_state()
+        url = (sub.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            self._state["statusMessage"] = "Manual config has no subscription URL to update"
             return self.get_state()
         try:
-            return self._sync_sub_url(sub["url"])
+            return self._sync_sub_url(url)
         except Exception as exc:
             self._state["statusMessage"] = f"Refresh error: {exc}"
             return self.get_state()

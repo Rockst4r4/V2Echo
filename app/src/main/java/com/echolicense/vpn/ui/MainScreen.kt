@@ -198,6 +198,18 @@ fun MainScreen(
 
                     LiquidGlassCard(
                         cornerRadius = 14.dp,
+                        modifier = Modifier.bounceClick { onRefreshSubscription() }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "Update Sub",
+                            tint = CyanLiquid,
+                            modifier = Modifier.padding(8.dp).size(19.dp)
+                        )
+                    }
+
+                    LiquidGlassCard(
+                        cornerRadius = 14.dp,
                         modifier = Modifier.bounceClick { showSubDialog = true }
                     ) {
                         Row(
@@ -741,7 +753,11 @@ fun MainScreen(
                 showSubDialog = false
                 onSwitchSubscription(item)
             },
-            onDelete = { item -> onDeleteSubscription(item) }
+            onDelete = { item -> onDeleteSubscription(item) },
+            onRefresh = {
+                showSubDialog = false
+                onRefreshSubscription()
+            }
         )
     }
 
@@ -833,6 +849,23 @@ private fun MultiSubscriptionDialog(
                 }
 
                 if (subscriptions.isNotEmpty()) {
+                    val updateSubLabel = if (s.subscriptions.any { it in '\u0600'..'\u06FF' }) "بروزرسانی اشتراک فعال" else "Update Active Subscription"
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(CyanLiquid.copy(alpha = 0.16f))
+                            .border(1.dp, CyanLiquid.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                            .bounceClick(onClick = onRefresh)
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Rounded.Refresh, null, tint = CyanLiquid, modifier = Modifier.size(19.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(updateSubLabel, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+
                     Text(s.savedSubs, color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
                     LazyColumn(
                         modifier = Modifier.heightIn(max = 150.dp),
